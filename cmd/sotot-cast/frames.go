@@ -21,8 +21,24 @@ import (
 type frame struct {
 	seq int
 	img *image.RGBA
-	png []byte
 	at  time.Time
+
+	pngOnce sync.Once
+	png     []byte
+}
+
+// pngBytes returns the frame encoded as PNG, encoding it on first use;
+// only some modes need it.
+func (f *frame) pngBytes() []byte {
+	f.pngOnce.Do(func() {
+		var buf bytes.Buffer
+		enc := png.Encoder{CompressionLevel: png.BestSpeed}
+		if err := enc.Encode(&buf, f.img); err != nil {
+			panic(err)
+		}
+		f.png = buf.Bytes()
+	})
+	return f.png
 }
 
 // hub holds recently rendered frames and wakes streams when a new one
@@ -36,14 +52,9 @@ type hub struct {
 func newHub() *hub { return &hub{changed: make(chan struct{})} }
 
 func (h *hub) publish(img *image.RGBA) *frame {
-	var buf bytes.Buffer
-	enc := png.Encoder{CompressionLevel: png.BestSpeed}
-	if err := enc.Encode(&buf, img); err != nil {
-		panic(err)
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	f := &frame{img: img, png: buf.Bytes(), at: time.Now()}
+	f := &frame{img: img, at: time.Now()}
 	if n := len(h.recent); n > 0 {
 		f.seq = h.recent[n-1].seq + 1
 	} else {
@@ -97,9 +108,10 @@ func (h *hub) serveFrame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("frame %d: %s by %s %v after render", f.seq, r.Method, r.RemoteAddr, time.Since(f.at).Round(time.Millisecond))
+	b := f.pngBytes()
 	setStreamHeaders(w, "image/png")
-	w.Header().Set("Content-Length", strconv.Itoa(len(f.png)))
-	w.Write(f.png)
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
+	w.Write(b)
 }
 
 // waitNext blocks until a frame newer than seq is published or the request
@@ -134,8 +146,9 @@ func (h *hub) serveMultipart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seq = f.seq
-		fmt.Fprintf(w, "--%s\r\nContent-Type: image/png\r\nContent-Length: %d\r\n\r\n", boundary, len(f.png))
-		w.Write(f.png)
+		b := f.pngBytes()
+		fmt.Fprintf(w, "--%s\r\nContent-Type: image/png\r\nContent-Length: %d\r\n\r\n", boundary, len(b))
+		w.Write(b)
 		if _, err := w.Write([]byte("\r\n")); err != nil {
 			return
 		}

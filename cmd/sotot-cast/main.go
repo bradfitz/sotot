@@ -1,8 +1,11 @@
 // Command sotot-cast shows the sotot dashboard on a Chromecast.
 //
-// This initial version renders a test pattern and casts it to the
-// Chromecast's Default Media Receiver in one of several ways, to compare
-// text crispness, update latency, and flicker:
+// It follows a sotot daemon's dashboard stream (--dashboard), draws a
+// TV-sized view of it, and casts that to the Chromecast's Default Media
+// Receiver. Without --dashboard it casts a test pattern instead.
+//
+// The --mode flag selects how frames reach the TV; mp4 is the one that
+// works well (crisp, no flashing, ~3s behind):
 //
 //   - png: a new still image LOAD per frame (flashes between frames)
 //   - gif: one never-ending animated GIF, extended as frames change
@@ -12,10 +15,13 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"flag"
 	"fmt"
+	"image"
+	"image/png"
 	"log"
 	"net"
 	"net/http"
@@ -30,16 +36,19 @@ import (
 )
 
 var (
-	flagTV       = flag.String("tv", "", "friendly name of the Cast device, or its host:port")
-	flagList     = flag.Bool("list", false, "list Cast devices on the LAN and exit")
-	flagMode     = flag.String("mode", "png", "how to cast: png, gif, multipart, hls, mp4, or url")
-	flagInterval = flag.Duration("interval", 0, "how often to render a new frame (default 3s for png, else 1s)")
-	flagSize     = flag.String("size", "1920x1080", "frame size in pixels")
-	flagPort     = flag.Int("http-port", 0, "TCP port for serving frames to the device; 0 picks one")
-	flagFPS      = flag.Int("fps", 5, "hls mode: video frame rate")
-	flagSegSecs  = flag.Int("segment-secs", 2, "hls mode: segment duration in seconds")
-	flagCRF      = flag.String("crf", "16", "hls mode: x264 constant rate factor; lower is higher quality")
-	flagVerbose  = flag.Bool("v", false, "verbose logging")
+	flagTV        = flag.String("tv", "", "friendly name of the Cast device, or its host:port")
+	flagList      = flag.Bool("list", false, "list Cast devices on the LAN and exit")
+	flagDashboard = flag.String("dashboard", "", "URL of the sotot dashboard to show, e.g. http://127.0.0.1:8080; if empty, a test pattern")
+	flagTZ        = flag.String("tz", "", "time zone for displaying times (default local)")
+	flagSnapshot  = flag.String("snapshot", "", "write one rendered frame to this PNG file and exit, without casting")
+	flagMode      = flag.String("mode", "mp4", "how to cast: mp4, png, gif, multipart, hls, or url")
+	flagInterval  = flag.Duration("interval", 0, "how often to render a new frame (default 3s for png, else 1s)")
+	flagSize      = flag.String("size", "1920x1080", "frame size in pixels")
+	flagPort      = flag.Int("http-port", 0, "TCP port for serving frames to the device; 0 picks one")
+	flagFPS       = flag.Int("fps", 5, "hls mode: video frame rate")
+	flagSegSecs   = flag.Int("segment-secs", 2, "hls mode: segment duration in seconds")
+	flagCRF       = flag.String("crf", "16", "hls mode: x264 constant rate factor; lower is higher quality")
+	flagVerbose   = flag.Bool("v", false, "verbose logging")
 
 	flagMaxLag      = flag.Float64("max-lag", 4, "mp4 mode: speed up playback when it's more than this many seconds behind live")
 	flagTargetLag   = flag.Float64("target-lag", 3, "mp4 mode: return to normal speed when playback is this close to live")
@@ -67,7 +76,7 @@ func main() {
 		}
 		return
 	}
-	if *flagTV == "" {
+	if *flagTV == "" && *flagSnapshot == "" {
 		log.Fatal("--tv is required (use --list to see devices)")
 	}
 	switch *flagMode {
@@ -91,6 +100,31 @@ func main() {
 		log.Fatalf("--size: %v", err)
 	}
 
+	var render func(time.Time) *image.RGBA
+	var changed <-chan struct{} // besides the clock
+	if *flagDashboard != "" {
+		loc := time.Local
+		if *flagTZ != "" {
+			if loc, err = time.LoadLocation(*flagTZ); err != nil {
+				log.Fatalf("--tz: %v", err)
+			}
+		}
+		fd, err := newFeed(*flagDashboard)
+		if err != nil {
+			log.Fatal(err)
+		}
+		go fd.run(ctx)
+		tv := newTVRenderer(w, h, loc)
+		render = func(now time.Time) *image.RGBA { return tv.render(now, fd.state()) }
+		changed = fd.changed
+	} else {
+		tp := newRenderer(w, h, *flagMode)
+		render = tp.render
+	}
+	if *flagSnapshot != "" {
+		writeSnapshot(ctx, *flagSnapshot, render, changed)
+		return
+	}
 	addr := *flagTV
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		d, err := cast.Find(ctx, *flagTV, 3*time.Second)
@@ -112,10 +146,13 @@ func main() {
 	baseURL := "http://" + ln.Addr().String()
 
 	hb := newHub()
-	r := newRenderer(w, h, *flagMode)
-	hb.publish(r.render(time.Now()))
+	prev := render(time.Now())
+	hb.publish(prev)
 	go func() {
-		// Render on interval boundaries so a seconds clock is never stale.
+		// Render on interval boundaries so a clock is never stale, and
+		// right away when the dashboard changes. Unchanged frames aren't
+		// republished, so modes that load per frame don't flash for
+		// nothing.
 		for {
 			now := time.Now()
 			t := time.NewTimer(now.Truncate(interval).Add(interval).Sub(now))
@@ -123,9 +160,17 @@ func main() {
 			case <-ctx.Done():
 				t.Stop()
 				return
-			case now := <-t.C:
-				hb.publish(r.render(now))
+			case now = <-t.C:
+			case <-changed:
+				t.Stop()
+				now = time.Now()
 			}
+			img := render(now)
+			if bytes.Equal(img.Pix, prev.Pix) {
+				continue
+			}
+			prev = img
+			hb.publish(img)
 		}
 	}()
 
@@ -363,4 +408,23 @@ func parseSize(s string) (w, h int, err error) {
 		return 0, 0, fmt.Errorf("invalid size %q", s)
 	}
 	return w, h, nil
+}
+
+// writeSnapshot writes one frame as a PNG, first waiting briefly for the
+// dashboard (if any) to deliver its state.
+func writeSnapshot(ctx context.Context, path string, render func(time.Time) *image.RGBA, changed <-chan struct{}) {
+	if changed != nil {
+		select {
+		case <-changed:
+		case <-time.After(5 * time.Second):
+		case <-ctx.Done():
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, render(time.Now())); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		log.Fatal(err)
+	}
 }
