@@ -1,0 +1,77 @@
+:root {
+  color-scheme: dark;
+  --bg: #10141c;
+  --panel: #181e29;
+  --fg: #e8eaee;
+  --muted: #9aa3b2;
+  --green: #3ddc6c;
+  --dark-green: #1f7a3c;
+  --red: #f05050;
+  --border: #283142;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header { padding: 16px 24px 4px; }
+h1 { margin: 0; font-size: 22px; }
+.tagline { color: var(--muted); font-weight: normal; font-size: 15px; margin-left: 8px; }
+main { padding: 8px 24px 32px; max-width: 1100px; }
+code { font-size: 0.95em; }
+
+.conn-warning {
+  margin: 8px 24px;
+  padding: 10px 14px;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  background: #3a1a1e;
+}
+.conn-warning:not([hidden]) ~ main { opacity: 0.6; }
+
+.sources { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
+.source {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; align-self: center; }
+.status-connected .dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.status-fresh .dot { background: var(--dark-green); }
+.status-stale .dot, .status-never .dot { background: var(--red); }
+.source-name { font-weight: 600; }
+.source-status, .source-detail { color: var(--muted); font-size: 14px; }
+.status-stale .source-status, .status-never .source-status { color: var(--red); }
+.source-error { color: var(--red); font-size: 14px; }
+
+.things { display: flex; flex-direction: column; gap: 8px; }
+.thing {
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.thing.from-stale { border-color: var(--red); }
+.thing-title { font-size: 17px; }
+.thing-title a { color: var(--fg); }
+.kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.thing-meta { color: var(--muted); font-size: 14px; }
+.thing.past .when { color: var(--fg); }
+.stale-flag { color: var(--red); margin-left: 4px; }
+.tag { margin-left: 6px; }
+.tag::before { content: "#"; }
+.thing-body { margin: 6px 0 0; white-space: pre-wrap; color: var(--muted); }
+.empty { color: var(--muted); }
+.empty.warn { color: var(--red); }

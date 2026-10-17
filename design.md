@@ -1,7 +1,8 @@
 # sotot — Stay On Top Of Things
 
-Status: initial design, 2026-09-12. This document records agreed requirements
-and proposes a first protocol. Proposed defaults remain adjustable before v1.
+Status: initial design, 2026-09-12; first implementation, 2026-10-17 (see
+Implementation status). This document records agreed requirements and the
+protocol. Proposed defaults remain adjustable before v1.
 
 ## Purpose
 
@@ -19,6 +20,36 @@ Sources push initial snapshots and subsequent updates over WebSockets carried
 by tailcat. sotot pushes changes to dashboard browsers over another WebSocket.
 For example, merging a PR elsewhere triggers a provider webhook to its source,
 which removes the PR from sotot immediately.
+
+## Vocabulary
+
+- **source**: a separate program that watches something and publishes to sotot.
+- **thing**: one entry needing attention (a PR, a bill, a message), identified
+  by (source ID, thing ID).
+
+## Implementation status, 2026-10-17
+
+Implemented as described below, with these decisions and differences:
+
+- tailcat (pinned at the reviewed commit) requires Go 1.27.1, so the module
+  does too.
+- A listener identity file is `{"version":1,"tailcat":<tailcat.PrivateKey>}`:
+  node key, disco key, pre-shared key, and exactly one pinned DERP region, so
+  `sotot address` can derive the address offline. `sotot new-identity FILE`
+  creates one pinned to the lowest-latency region and refuses to overwrite.
+- The dashboard streams (`/ws` rendered HTML for browsers, `/api/v1/stream`
+  JSON for other displays) send the full state on connection and after each
+  change, rather than a snapshot followed by deltas. Notifications coalesce, so
+  a slow client skips to the latest state and never blocks ingestion, and
+  ordering problems can't arise. This is fine at personal scale; revisit if
+  views get large.
+- The Go/Wasm browser client is 2.1 MB (622 KB gzipped, served compressed)
+  after parsing JSON with the browser's `JSON.parse` instead of
+  `encoding/json`, which tripled its size. The server-rendered page is
+  complete without it, and says so when it's not built (`go generate ./web`).
+- Not yet implemented: SIGHUP reload (restart to apply configuration), and an
+  automated test against real tailcat/DERP (end-to-end use was verified
+  manually). Listener rotation is supported by configuration but untested.
 
 ## Agreed scope
 
@@ -125,11 +156,11 @@ sessions as well as preventing new connections. Immediate revocation skips the
 overlap. Rotation does not erase last known source data. A removed source no
 longer appears in the dashboard; its cache can remain for explicit cleanup.
 
-## Stable item schema
+## Stable thing schema
 
 Publish Go types and protocol documentation together. Source authors depend on
-the wire contract, not daemon internals. An item's identity is `(source ID, item
-ID)`; item IDs must remain stable across reconnects and source restarts.
+the wire contract, not daemon internals. A thing's identity is `(source ID, thing
+ID)`; thing IDs must remain stable across reconnects and source restarts.
 
 Proposed v1 fields:
 
@@ -138,7 +169,7 @@ Proposed v1 fields:
 | `id` | string, required | Opaque ID unique within the source. |
 | `title` | string, required | Short human-readable description. |
 | `body` | string, optional | Plain text context; no arbitrary HTML. |
-| `url` | string, optional | HTTP(S) link to the original item or its action page. |
+| `url` | string, optional | HTTP(S) link to the original thing or its action page. |
 | `kind` | string, optional | Descriptive category such as `pull_request`, `meeting`, `renewal`. |
 | `attention_at` | timestamp, optional | When the source thinks attention should begin. |
 | `starts_at` | timestamp, optional | Event start. |
@@ -157,8 +188,8 @@ for the same temporal fact. Multi-day all-day ranges are deferred.
 
 Missing times are unknown, not overdue. No required urgency enum or scoring
 formula yet. The UI can display supplied dates without committing to a ranking
-scheme. An item reaching its date or deadline does not automatically remove it.
-The source removes resolved items in a delta or its next snapshot.
+scheme. A thing reaching its date or deadline does not automatically remove it.
+The source removes resolved things in a delta or its next snapshot.
 
 ## Source WebSocket protocol v1
 
@@ -169,7 +200,7 @@ All examples below are proposed normative v1 shapes.
 
 The first source message must be a full snapshot, including an empty array when
 there is nothing to report. Set a proposed 30-second initial snapshot deadline.
-The daemon validates and replaces the source's item set atomically; a partial or
+The daemon validates and replaces the source's thing set atomically; a partial or
 invalid snapshot never erases the previous data.
 
 ```json
@@ -177,7 +208,7 @@ invalid snapshot never erases the previous data.
   "type": "snapshot",
   "seq": 1,
   "valid_for_seconds": 2592000,
-  "items": [
+  "things": [
     {
       "id": "example.net",
       "title": "Renew example.net",
@@ -191,7 +222,7 @@ invalid snapshot never erases the previous data.
 
 `valid_for_seconds` is a required nonnegative integer. On acceptance, sotot sets
 `expires_at = received_at + valid_for_seconds`. It is a cache validity period,
-not an item's deadline. A 30-day validity is exactly 2,592,000 seconds.
+not a thing's deadline. A 30-day validity is exactly 2,592,000 seconds.
 Zero means data becomes stale immediately when the source disconnects.
 
 The source can then remain connected and send atomic deltas:
@@ -205,13 +236,13 @@ The source can then remain connected and send atomic deltas:
 }
 ```
 
-An upsert replaces the entire item; it is not a field patch. Removing an unknown
+An upsert replaces the entire thing; it is not a field patch. Removing an unknown
 ID is harmless. Duplicate IDs within a snapshot or message, or the same ID in
 both delta lists, are errors. A delta may include `valid_for_seconds` to refresh
 the validity of the whole resulting dataset. If absent, expiry is unchanged:
-learning about one item does not implicitly renew confidence in all other items.
+learning about one thing does not implicitly renew confidence in all other things.
 
-A source may renew validity without changing items:
+A source may renew validity without changing things:
 
 ```json
 {"type":"refresh","seq":3,"valid_for_seconds":86400}
@@ -238,7 +269,7 @@ tailcat transport cleanup without exiting before the ack arrives.
 
 Proposed default: sotot sends WebSocket pings every 30 seconds and requires a
 matching pong within 90 seconds. Source clients continuously read control frames
-even when they have no item updates. Pongs assert process/connection liveness;
+even when they have no thing updates. Pongs assert process/connection liveness;
 they do not renew persisted dataset expiration.
 
 After its first accepted snapshot, a live session makes the source current
@@ -272,7 +303,7 @@ current authoritative session separately.
 
 A newly opened session awaiting its first snapshot has a Connecting annotation
 and retains its previous data status. An accepted empty snapshot is fresh data.
-Keep stale items visible with a source-level warning; do not silently imply
+Keep stale things visible with a source-level warning; do not silently imply
 that nothing needs attention. Use labels/icons as well as color.
 
 Timers publish status changes at expiry even if no source sends anything.
@@ -281,7 +312,7 @@ current data. Load cached expiry as written; restarting never extends validity.
 
 ## JSON disk cache
 
-Use one versioned JSON file per stable source ID, containing items, whether a
+Use one versioned JSON file per stable source ID, containing things, whether a
 snapshot exists, expiry, data revision, and historical connection/data timestamps.
 Store listener private material separately from cache data. Use validated source
 IDs (proposed `[a-z0-9][a-z0-9_-]{0,63}`) for safe filenames, private directories,
@@ -324,7 +355,7 @@ or Node build is required. This choice should be checked against initial page
 weight; a minimal JavaScript client would require revisiting the all-Go preference.
 
 On browser connection, send a complete dashboard snapshot followed by ordered
-updates for item and source-status changes. Use a daemon instance ID plus a
+updates for thing and source-status changes. Use a daemon instance ID plus a
 monotonic revision. Register subscriptions and capture the initial snapshot under
 the same synchronization boundary so updates cannot fall between them.
 Reconnect always requests a fresh full snapshot; no replay log in v1.
@@ -333,7 +364,7 @@ Bound per-browser queues. A slow browser is disconnected and resynchronizes,
 without blocking ingestion. Show a dashboard-connection warning while browser
 updates are unavailable; do not imply displayed source statuses are live then.
 
-The initial view can list source status and items with their supplied dates and
+The initial view can list source status and things with their supplied dates and
 links. Specific grouping, filtering, urgency sorting, and horizon presentation
 remain deferred until real sources provide experience. Render source text safely
 and do not fetch arbitrary source-provided URLs on the daemon.
@@ -351,12 +382,29 @@ display session, and recover after device or network interruptions. The display
 should reflect realtime dashboard updates and show when its connection to sotot
 is unavailable, preserving the dashboard's source-freshness indicators.
 
-The exact Cast receiver and rendering approach is deferred. The design must
-account for how the display reaches dashboard content when sotot is listening
-only on localhost or through tsnet; the companion may need to bridge access
-from its host to the LAN device. Source-ingestion capability tokens must not be
-passed to the display. Device discovery, selection, and access configuration
-will be specified when implementing the companion.
+Decided after experiments on a Chromecast Ultra (2026-10-17): sotot-cast
+follows the dashboard's JSON stream (`/api/v1/stream`), draws a TV-specific
+layout itself in Go (large type, nothing under ~24px at 1080p, since 14px is
+borderline from across a room), and casts it to the stock Default Media
+Receiver, so no Cast app registration is needed. The Chromecast never contacts
+sotot: it only fetches video from sotot-cast on the LAN, which resolves the
+localhost/tsnet access question, and no source capability reaches it.
+
+Pixels reach the TV as one never-ending fragmented MP4 over a single HTTP
+response, encoded by ffmpeg (libx264 `stillimage,zerolatency`, 5 fps,
+one-second keyframe fragments, a silent AAC track). Rejected alternatives:
+loading one PNG per update is pixel-exact and fast (~70ms) but the receiver
+flashes between images; the receiver's HLS player showed only a black screen
+for our live stream. The receiver buffers about 5 seconds before playing, and
+seeking an endless stream restarts it, so sotot-cast plays at 1.25x until it
+is 3 seconds behind live; draining the buffer further makes the receiver fail
+the stream. Updates therefore show about 3 seconds after they happen. A red
+banner replaces the view's claim to be live when the stream from sotot is
+down.
+
+Devices are found by friendly name over mDNS (`--tv=NAME`), or given as
+`--tv=host:port`. sotot-cast exits if another sender takes over the TV rather
+than fighting for it.
 
 ### Layout
 
@@ -371,8 +419,10 @@ protocol/                 public JSON types and validation
 source/                   public Go publishing client
 internal/ingest/           tailcat and WebSocket sessions
 internal/state/            source state, serialized mutations, cache
-internal/dashboard/        HTTP handlers and subscriptions
-web/                      Go/Wasm client, templates, styles
+internal/dashboard/        HTTP handlers, templates, and subscriptions
+internal/present/          display ordering and time labels (browser and TV)
+internal/cast/             minimal Cast (CASTV2) client and mDNS discovery
+web/                      Go/Wasm client and styles
 docs/source-protocol.md    standalone external-source contract
 design.md                 this design
 ```
@@ -395,7 +445,7 @@ webhook endpoint for GitHub or other providers.
 ## Implementation stages and meaningful checks
 
 1. Freeze the first protocol types and examples, with validation and documented
-   limits. Proposed initial configurable limits: 8 MiB per message, 10,000 items
+   limits. Proposed initial configurable limits: 8 MiB per message, 10,000 things
    per source, and bounded title/body lengths.
 2. Implement source state, cache, liveness, and ingestion with both demo sources.
 3. Implement the read-only dashboard and both listener modes.

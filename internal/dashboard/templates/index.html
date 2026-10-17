@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sotot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>sotot <span class="tagline">stay on top of things</span></h1>
+</header>
+<div id="conn" class="conn-warning"{{if .HaveWasm}} hidden{{end}}>
+  {{- if .HaveWasm -}}
+  Live updates unavailable; reconnecting. Statuses below may be out of date.
+  {{- else -}}
+  Live updates unavailable: the browser client isn't built (run <code>go generate ./web</code>). This page shows the state when it loaded.
+  {{- end -}}
+</div>
+<main id="view">{{template "view" .Data}}</main>
+{{if .HaveWasm}}
+<script src="/static/wasm_exec.js"></script>
+<script src="/static/boot.js"></script>
+{{end}}
+</body>
+</html>

@@ -1,0 +1,38 @@
+{{define "view"}}
+<section class="sources" aria-label="Sources">
+  {{range .View.Sources}}
+  <div class="source status-{{.Status}}">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="source-name">{{.Name}}</span>
+    <span class="source-status">{{statusLabel .}}</span>
+    {{with statusDetail . $.Now}}<span class="source-detail">{{.}}</span>{{end}}
+    {{with .CacheError}}<span class="source-error">cache: {{.}}</span>{{end}}
+  </div>
+  {{else}}
+  <p class="empty">No sources configured.</p>
+  {{end}}
+</section>
+<section class="things" aria-label="Things">
+  {{range .Entries}}
+  <article class="thing{{if eq .SourceStatus "stale"}} from-stale{{end}}{{with .When}}{{if .Past}} past{{end}}{{end}}">
+    <div class="thing-title">
+      {{with .Thing.Kind}}<span class="kind">{{.}}</span>{{end}}
+      {{if .Thing.URL}}<a href="{{.Thing.URL}}" rel="noreferrer noopener" target="_blank">{{.Thing.Title}}</a>{{else}}{{.Thing.Title}}{{end}}
+    </div>
+    <div class="thing-meta">
+      {{with .When}}<span class="when">{{.Label}}</span> <span class="relative">({{.Relative}})</span> ·{{end}}
+      <span class="from">{{.SourceName}}</span>
+      {{if eq .SourceStatus "stale"}}<span class="stale-flag">stale</span>{{end}}
+      {{range .Thing.Tags}}<span class="tag">{{.}}</span>{{end}}
+    </div>
+    {{with .Thing.Body}}<p class="thing-body">{{.}}</p>{{end}}
+  </article>
+  {{else}}
+  {{if .Uncertain}}
+  <p class="empty warn">Nothing reported, but some sources are stale or have never reported.</p>
+  {{else}}
+  <p class="empty">Nothing needs attention.</p>
+  {{end}}
+  {{end}}
+</section>
+{{end}}
