@@ -15,6 +15,7 @@
 package source
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,9 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -50,12 +53,36 @@ type Client struct {
 	// tailcat to Addr. It's for tests.
 	Dial func(ctx context.Context) (net.Conn, error)
 
+	// PingInterval and PongTimeout control how the client checks that
+	// sotot is still there; zero means 30s and 60s.
+	PingInterval, PongTimeout time.Duration
+
 	mu       sync.Mutex
 	things   map[string]protocol.Thing
+	summary  string
 	validFor time.Duration
 	renew    bool          // whether to renew validity in the next message
 	wake     chan struct{} // capacity 1; signaled on changes
 	tc       *tailcat.Client
+}
+
+// NewClientFromEnv returns a client for the address in $SOTOT_ADDR, or in
+// the file named by $SOTOT_ADDR_FILE. The address is a secret, so sources
+// should take it from the environment rather than a command-line flag,
+// which other users can see.
+func NewClientFromEnv() (*Client, error) {
+	addr := strings.TrimSpace(os.Getenv("SOTOT_ADDR"))
+	if f := os.Getenv("SOTOT_ADDR_FILE"); addr == "" && f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("reading $SOTOT_ADDR_FILE: %w", err)
+		}
+		addr = strings.TrimSpace(string(b))
+	}
+	if addr == "" {
+		return nil, errors.New("set $SOTOT_ADDR or $SOTOT_ADDR_FILE to this source's address (from: sotot address SOURCE-ID)")
+	}
+	return &Client{Addr: addr}, nil
 }
 
 func (c *Client) logf(format string, args ...any) {
@@ -94,6 +121,21 @@ func (c *Client) SetValidFor(d time.Duration) {
 	c.validFor = d
 	c.renew = true
 	c.changedLocked()
+}
+
+// SetSummary sets a very short description of the source's state, such
+// as "15 domains", which the dashboard shows instead of "Connected". The empty
+// string clears it.
+func (c *Client) SetSummary(s string) error {
+	if err := protocol.ValidateSummary(s); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.initLocked()
+	c.summary = s
+	c.changedLocked()
+	return nil
 }
 
 // Refresh renews the validity of the current data, without changing it.
@@ -295,10 +337,12 @@ func (c *Client) session(ctx context.Context, established func(), once bool) err
 
 	var seq int64
 	sent := map[string]protocol.Thing{} // what sotot has, as of our last send
+	var sentSummary string
 	sendSnapshot := func() error {
 		c.mu.Lock()
 		c.initLocked()
-		m := &protocol.Snapshot{Type: protocol.TypeSnapshot, ValidForSeconds: protocol.Seconds(c.validFor), Things: []protocol.Thing{}}
+		m := &protocol.Snapshot{Type: protocol.TypeSnapshot, ValidForSeconds: protocol.Seconds(c.validFor), Things: []protocol.Thing{}, Summary: c.summary}
+		sentSummary = c.summary
 		sent = make(map[string]protocol.Thing, len(c.things))
 		for id, t := range c.things {
 			m.Things = append(m.Things, t)
@@ -337,6 +381,30 @@ func (c *Client) session(ctx context.Context, established func(), once bool) err
 		established()
 	}
 
+	// Check that sotot is still there. A daemon that restarts can vanish
+	// without its close ever arriving, leaving reads waiting forever.
+	go func() {
+		t := time.NewTicker(cmp.Or(c.PingInterval, 30*time.Second))
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			pctx, pcancel := context.WithTimeout(ctx, cmp.Or(c.PongTimeout, 60*time.Second))
+			err := conn.Ping(pctx)
+			pcancel()
+			if err != nil && ctx.Err() == nil {
+				select {
+				case readErr <- fmt.Errorf("sotot stopped answering pings: %w", err):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
 	c.mu.Lock()
 	c.initLocked()
 	wake := c.wake
@@ -369,7 +437,7 @@ func (c *Client) session(ctx context.Context, established func(), once bool) err
 				remove = append(remove, id)
 			}
 		}
-		renew, validFor := c.renew, c.validFor
+		renew, validFor, summary := c.renew, c.validFor, c.summary
 		c.renew = false
 		c.mu.Unlock()
 
@@ -377,11 +445,15 @@ func (c *Client) session(ctx context.Context, established func(), once bool) err
 		switch {
 		case len(upsert)+len(remove) > protocol.MaxThings:
 			err = sendSnapshot() // too big for one delta
-		case len(upsert)+len(remove) > 0:
+		case len(upsert)+len(remove) > 0 || summary != sentSummary:
 			seq++
 			m := &protocol.Delta{Type: protocol.TypeDelta, Seq: seq, Upsert: upsert, Remove: remove}
 			if renew {
 				m.ValidForSeconds = protocol.Seconds(validFor)
+			}
+			if summary != sentSummary {
+				m.Summary = &summary
+				sentSummary = summary
 			}
 			for _, t := range upsert {
 				sent[t.ID] = t

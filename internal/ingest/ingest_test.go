@@ -3,11 +3,13 @@ package ingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,6 +78,10 @@ func TestClientRun(t *testing.T) {
 	waitFor(t, "upsert", func() bool { return ids(chatView(st)) == "alice,bob" })
 	c.Remove("alice")
 	waitFor(t, "remove", func() bool { return ids(chatView(st)) == "bob" })
+	if err := c.SetSummary("1 unread"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "summary", func() bool { return chatView(st).Summary == "1 unread" })
 
 	cancel()
 	<-done
@@ -241,4 +247,66 @@ func TestConnListener(t *testing.T) {
 	if _, err := cl.Accept(); err != errClosed {
 		t.Fatalf("Accept after Close: %v", err)
 	}
+}
+
+// TestClientNoticesVanishedDaemon checks that a source reconnects when
+// the daemon disappears without its close arriving, as happens when a
+// restarting daemon tears down its tailcat tunnels.
+func TestClientNoticesVanishedDaemon(t *testing.T) {
+	st, ts := newTestServer(t, &Handler{})
+	var mu sync.Mutex
+	var conns []net.Conn
+	blackhole := false
+	// A proxy that can silently stop forwarding, without closing.
+	dial := func(ctx context.Context) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if blackhole {
+			return nil, errors.New("unreachable")
+		}
+		client, proxy := net.Pipe()
+		var d net.Dialer
+		up, err := d.DialContext(ctx, "tcp", ts.Listener.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		conns = append(conns, up, proxy)
+		go io.Copy(up, proxy)
+		go io.Copy(proxy, up)
+		return client, nil
+	}
+	c := &source.Client{Dial: dial, Logf: t.Logf, PingInterval: 50 * time.Millisecond, PongTimeout: 100 * time.Millisecond}
+	c.Set([]protocol.Thing{{ID: "a", Title: "A"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+	waitFor(t, "first session", func() bool { return chatView(st).Status == state.Connected })
+
+	// The network path vanishes: nothing is closed, packets just stop.
+	mu.Lock()
+	blackhole = true
+	for _, nc := range conns {
+		if tc, ok := nc.(*net.TCPConn); ok {
+			tc.CloseRead() // the daemon's side goes quiet
+		}
+	}
+	h := conns
+	conns = nil
+	mu.Unlock()
+	for _, nc := range h {
+		if p, ok := nc.(interface{ SetDeadline(time.Time) error }); ok {
+			p.SetDeadline(time.Now()) // stall the proxy's copies
+		}
+	}
+	// The daemon notices on its side and marks the source disconnected...
+	// (here, by the test server's own pings being stalled too)
+	mu.Lock()
+	blackhole = false
+	mu.Unlock()
+	// ...and the client must notice too, and reconnect.
+	before := chatView(st).LastConnectedAt
+	waitFor(t, "reconnect", func() bool {
+		sv := chatView(st)
+		return sv.LastConnectedAt != nil && before != nil && sv.LastConnectedAt.After(*before)
+	})
 }
