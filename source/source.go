@@ -218,6 +218,10 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// Start the next attempt with a fresh tailcat client. A client
+		// introduces itself to the server only once, so after the daemon
+		// restarts, an old client's dials go unanswered forever.
+		c.resetTransport()
 		// Full jitter, so many sources don't reconnect in lockstep.
 		d := time.Duration(rand.Int64N(int64(backoff))) + backoff/2
 		c.logf("source: %v; reconnecting in %v", err, d.Round(100*time.Millisecond))
@@ -235,6 +239,18 @@ func (c *Client) Run(ctx context.Context) error {
 // isn't proof of publication; the ack is.
 func (c *Client) PublishOnce(ctx context.Context) error {
 	return c.session(ctx, nil, true)
+}
+
+// resetTransport discards the tailcat client, so the next dial makes a
+// new one.
+func (c *Client) resetTransport() {
+	c.mu.Lock()
+	tc := c.tc
+	c.tc = nil
+	c.mu.Unlock()
+	if tc != nil {
+		go tc.Close() // may block briefly; don't delay the reconnect
+	}
 }
 
 // Close releases the tailcat transport. Call it after Run or PublishOnce

@@ -19,14 +19,35 @@ import (
 	"github.com/coder/websocket"
 )
 
+// testLogf returns a logf for t that drops messages once the test is
+// over, since sessions can end (and log) after it completes, which would
+// otherwise panic.
+func testLogf(t *testing.T) func(string, ...any) {
+	var mu sync.Mutex
+	done := false
+	t.Cleanup(func() { // registered first, so runs last
+		mu.Lock()
+		defer mu.Unlock()
+		done = true
+	})
+	return func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			t.Logf(format, args...)
+		}
+	}
+}
+
 func newTestServer(t *testing.T, h *Handler) (*state.Store, *httptest.Server) {
 	t.Helper()
-	st, err := state.New(state.Config{Sources: []state.SourceConfig{{ID: "chat", Name: "Chat"}}, Logf: t.Logf})
+	logf := testLogf(t)
+	st, err := state.New(state.Config{Sources: []state.SourceConfig{{ID: "chat", Name: "Chat"}}, Logf: logf})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	h.Store, h.SourceID, h.Logf = st, "chat", t.Logf
+	h.Store, h.SourceID, h.Logf = st, "chat", logf
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 	t.Cleanup(h.CloseSessions)
@@ -64,7 +85,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestClientRun(t *testing.T) {
 	st, ts := newTestServer(t, &Handler{})
-	c := &source.Client{Dial: dialer(ts), Logf: t.Logf}
+	c := &source.Client{Dial: dialer(ts), Logf: testLogf(t)}
 	c.SetValidFor(time.Hour)
 	c.Set([]protocol.Thing{{ID: "alice", Title: "Reply to Alice"}})
 
@@ -90,7 +111,7 @@ func TestClientRun(t *testing.T) {
 
 func TestPublishOnce(t *testing.T) {
 	st, ts := newTestServer(t, &Handler{})
-	c := &source.Client{Dial: dialer(ts), Logf: t.Logf}
+	c := &source.Client{Dial: dialer(ts), Logf: testLogf(t)}
 	c.SetValidFor(30 * 24 * time.Hour)
 	c.Set([]protocol.Thing{{ID: "example.net", Title: "Renew example.net", Kind: "renewal", Date: "2027-06-12", TimeZone: "America/Los_Angeles"}})
 	if err := c.PublishOnce(context.Background()); err != nil {
@@ -275,7 +296,7 @@ func TestClientNoticesVanishedDaemon(t *testing.T) {
 		go io.Copy(proxy, up)
 		return client, nil
 	}
-	c := &source.Client{Dial: dial, Logf: t.Logf, PingInterval: 50 * time.Millisecond, PongTimeout: 100 * time.Millisecond}
+	c := &source.Client{Dial: dial, Logf: testLogf(t), PingInterval: 50 * time.Millisecond, PongTimeout: 100 * time.Millisecond}
 	c.Set([]protocol.Thing{{ID: "a", Title: "A"}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
