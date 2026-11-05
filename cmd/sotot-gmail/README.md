@@ -117,9 +117,21 @@ without connecting to sotot.
 Flags:
 
 - `--labels=INBOX,todo`: labels a thread must all have.
-- `--interval=2m`: how often to check.
+- `--check-interval=15s`: how often to check whether anything in the
+  mailbox changed, by its history ID (1 quota unit). Only then does it
+  search (about 10 units, plus 40 per changed thread).
+- `--interval=10m`: search at least this often anyway.
 - `--account=N`: which signed-in Google account links open in
   (`mail.google.com/mail/u/N`).
+
+## Why is that thread still showing?
+
+Gmail labels messages, not conversations; a thread has a label if any of
+its messages does, as in Gmail's own search (`in:inbox label:todo`).
+When a reply arrives in a labeled conversation, the new message isn't
+labeled, but the thread still is. `sotot-gmail debug` shows, for each
+matching thread, which of its messages carry which of the labels (and
+Gmail's system labels), without subjects or senders.
 
 ## When access stops working
 

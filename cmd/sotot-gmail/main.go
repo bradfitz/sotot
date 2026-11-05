@@ -37,7 +37,8 @@ import (
 var (
 	tokenFile = flag.String("token", os.Getenv("SOTOT_GMAIL_TOKEN_FILE"), "token file written by `sotot-gmail login` (default $SOTOT_GMAIL_TOKEN_FILE)")
 	labels    = flag.String("labels", "INBOX,todo", "comma-separated Gmail labels a thread must all have to need attention")
-	interval  = flag.Duration("interval", 2*time.Minute, "how often to search")
+	interval  = flag.Duration("interval", 10*time.Minute, "most time between full searches, even if Gmail reports no changes")
+	checkInt  = flag.Duration("check-interval", 15*time.Second, "how often to check (cheaply) whether the mailbox changed, and search if so")
 	account   = flag.Int("account", 0, "which signed-in Gmail account links open in (the N in mail.google.com/mail/u/N)")
 	dryRun    = flag.Bool("dry-run", false, "search once, print what would be published as JSON, and exit")
 )
@@ -45,6 +46,12 @@ var (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "login" {
 		if err := loginCmd(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "debug" {
+		if err := debugCmd(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -101,9 +108,25 @@ func main() {
 	var lastSum string
 	var failing error
 	var failingSince time.Time
-	t := time.NewTicker(*interval)
+	t := time.NewTicker(*checkInt)
 	defer t.Stop()
-	for {
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+		// Checking the mailbox's history ID costs 1 quota unit; a full
+		// search costs 10 plus 40 per changed thread. So search only
+		// when something in the mailbox changed (any change: archiving
+		// a thread can touch only messages without the label), or as a
+		// safety net every --interval.
+		hid, need := w.needSearch(ctx, *interval)
+		if !need {
+			continue
+		}
 		ts, sum, err := w.poll(ctx)
 		if err != nil {
 			log.Printf("gmail: %v", err)
@@ -114,6 +137,7 @@ func main() {
 			ts, sum = last, lastSum
 		} else {
 			last, lastSum, failing = ts, sum, nil
+			w.searched(hid)
 			c.Refresh() // the search vouches for all of it
 		}
 		if failing != nil {
@@ -126,11 +150,6 @@ func main() {
 		}
 		if err := c.Set(ts); err != nil {
 			log.Printf("publishing: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
 		}
 	}
 }
@@ -166,6 +185,29 @@ type watcher struct {
 	labels  []string
 	account int
 	cache   map[string]threadInfo // by thread ID; reused while historyId is unchanged
+
+	lastHistory string    // mailbox history ID as of the last successful search
+	lastSearch  time.Time // when that was
+}
+
+// needSearch reports whether the mailbox has changed since the last
+// successful search, or that was more than maxAge ago, returning the
+// mailbox's current history ID to pass to searched afterward. If the
+// check itself fails, it reports a search is needed, so the search
+// reports the problem.
+func (w *watcher) needSearch(ctx context.Context, maxAge time.Duration) (historyID string, need bool) {
+	hid, err := w.gm.historyID(ctx)
+	if err != nil {
+		return "", true
+	}
+	return hid, hid != w.lastHistory || time.Since(w.lastSearch) >= maxAge
+}
+
+// searched records a successful search that started when the mailbox's
+// history ID was historyID. (Taken before searching, so a change during
+// the search is caught by the next check.)
+func (w *watcher) searched(historyID string) {
+	w.lastHistory, w.lastSearch = historyID, time.Now()
 }
 
 // threadInfo is what's shown for a thread.

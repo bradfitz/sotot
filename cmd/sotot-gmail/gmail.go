@@ -246,6 +246,18 @@ func displayName(from string) string {
 	return strings.Trim(from, "<>")
 }
 
+// historyID returns the ID of the mailbox's current history record,
+// which increases whenever anything in the mailbox changes.
+func (g *gmailClient) historyID(ctx context.Context) (string, error) {
+	var res struct {
+		HistoryID string `json:"historyId"`
+	}
+	if err := g.get(ctx, "profile", url.Values{"fields": {"historyId"}}, &res); err != nil {
+		return "", err
+	}
+	return res.HistoryID, nil
+}
+
 func (g *gmailClient) emailAddress(ctx context.Context) (string, error) {
 	var res struct {
 		EmailAddress string `json:"emailAddress"`

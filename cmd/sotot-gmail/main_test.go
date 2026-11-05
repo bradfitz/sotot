@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// history is the fake mailbox's history ID.
+var history atomic.Int64
+
 // fakeGmail serves enough of the Gmail API for the watcher.
 func fakeGmail(t *testing.T, threadGets *atomic.Int32) *httptest.Server {
 	t.Helper()
@@ -19,6 +22,8 @@ func fakeGmail(t *testing.T, threadGets *atomic.Int32) *httptest.Server {
 		switch p := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/"); {
 		case p == "labels":
 			fmt.Fprint(w, `{"labels":[{"id":"INBOX","name":"INBOX"},{"id":"Label_7","name":"todo"},{"id":"Label_8","name":"other"}]}`)
+		case p == "profile":
+			fmt.Fprintf(w, `{"historyId":"%d"}`, history.Load())
 		case p == "threads":
 			ids := r.URL.Query()["labelIds"]
 			if strings.Join(ids, ",") != "INBOX,Label_7" {
@@ -126,5 +131,30 @@ func TestErrorThing(t *testing.T) {
 	}
 	if _, ok := errorThing(errors.New("503"), since, time.Second); !ok {
 		t.Error("persistent error not shown")
+	}
+}
+
+func TestNeedSearch(t *testing.T) {
+	var gets atomic.Int32
+	ts := fakeGmail(t, &gets)
+	w := &watcher{gm: &gmailClient{hc: ts.Client(), base: ts.URL}, cache: map[string]threadInfo{}}
+	ctx := context.Background()
+	history.Store(100)
+	hid, need := w.needSearch(ctx, time.Hour)
+	if !need {
+		t.Fatal("first check doesn't search")
+	}
+	w.searched(hid)
+	if _, need := w.needSearch(ctx, time.Hour); need {
+		t.Error("searched again with the mailbox unchanged")
+	}
+	history.Store(101) // e.g. a label removed
+	if _, need := w.needSearch(ctx, time.Hour); !need {
+		t.Error("didn't search after the mailbox changed")
+	}
+	w.searched("101")
+	w.lastSearch = time.Now().Add(-2 * time.Hour)
+	if _, need := w.needSearch(ctx, time.Hour); !need {
+		t.Error("didn't search after maxAge, as a safety net")
 	}
 }
