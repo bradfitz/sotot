@@ -415,6 +415,8 @@ cmd/sotot/                 daemon entry point
 cmd/sotot-cast/            optional LAN Chromecast display companion
 cmd/sotot-demo-live/       updates, removals, and reconnects
 cmd/sotot-demo-periodic/   snapshot, ack, disconnect, expiry
+cmd/sotot-gandi/           source: domains in a Gandi account
+cmd/sotot-porkbun/         source: domains in a Porkbun account
 protocol/                 public JSON types and validation
 source/                   public Go publishing client
 internal/ingest/           tailcat and WebSocket sessions
@@ -422,6 +424,7 @@ internal/state/            source state, serialized mutations, cache
 internal/dashboard/        HTTP handlers, templates, and subscriptions
 internal/present/          display ordering and time labels (browser and TV)
 internal/cast/             minimal Cast (CASTV2) client and mDNS discovery
+internal/domainwatch/      shared core of registrar sources: RDAP/whois, policy
 web/                      Go/Wasm client and styles
 docs/source-protocol.md    standalone external-source contract
 design.md                 this design
