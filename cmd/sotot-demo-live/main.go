@@ -72,6 +72,9 @@ func main() {
 			if err := c.Set(w.things()); err != nil {
 				log.Printf("demo: %v", err)
 			}
+			// The demo always knows its complete state, so each update
+			// vouches for all of it.
+			c.Refresh()
 		}
 	}()
 	if err := c.Run(ctx); err != nil && ctx.Err() == nil {

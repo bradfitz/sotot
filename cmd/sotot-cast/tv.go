@@ -11,6 +11,7 @@ import (
 
 	"github.com/bradfitz/sotot/internal/present"
 	"github.com/bradfitz/sotot/internal/state"
+	"github.com/bradfitz/sotot/protocol"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
@@ -233,6 +234,16 @@ func (r *tvRenderer) drawEntry(img *image.RGBA, rect image.Rectangle, e present.
 	roundRect(img, rect, float64(r.px(14)), border)
 	inset := r.px(3)
 	roundRect(img, rect.Inset(inset), float64(r.px(12)), tvPanel)
+	high := e.Thing.Priority == protocol.PriorityHigh
+	titleColor := color.Color(fg)
+	switch e.Thing.Priority {
+	case protocol.PriorityHigh:
+		// A red bar down the left edge.
+		bar := image.Rect(rect.Min.X, rect.Min.Y, rect.Min.X+r.px(12), rect.Max.Y)
+		roundRect(img, bar, float64(r.px(6)), tvRed)
+	case protocol.PriorityLow:
+		titleColor = tvMuted
+	}
 
 	x := rect.Min.X + r.px(28)
 	maxX := rect.Max.X - r.px(28)
@@ -245,15 +256,15 @@ func (r *tvRenderer) drawEntry(img *image.RGBA, rect image.Rectangle, e present.
 		r.text(img, x+r.px(12), ky+r.px(27), 24, true, tvMuted, k, 0)
 		x += kw + r.px(16)
 	}
-	r.text(img, x, rect.Min.Y+r.px(48), 38, false, fg, e.Thing.Title, maxX-x)
+	r.text(img, x, rect.Min.Y+r.px(48), 38, high, titleColor, e.Thing.Title, maxX-x)
 
 	// Meta line: when, and from which source.
 	x = rect.Min.X + r.px(28)
 	y := rect.Min.Y + r.px(92)
 	if w := e.When; w != nil {
 		c := tvMuted
-		if w.Past && e.Thing.DueAt != nil {
-			c = tvRed // past a deadline
+		if high || (w.Past && e.Thing.DueAt != nil) {
+			c = tvRed // pressing, or past a deadline
 		}
 		x = r.text(img, x, y, 28, true, c, w.Relative, 0)
 		x = r.text(img, x+r.px(14), y, 28, false, tvMuted, "· "+w.Label, 0)

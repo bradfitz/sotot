@@ -18,9 +18,9 @@ import (
 type feed struct {
 	url string // ws:// or wss:// URL of /api/v1/stream
 
-	mu      sync.Mutex
-	st      feedState
-	changed chan struct{} // capacity 1
+	mu   sync.Mutex
+	st   feedState
+	subs []chan struct{} // each capacity 1; notified on changes
 }
 
 // feedState is what the feed knows about the dashboard.
@@ -47,10 +47,19 @@ func newFeed(dashboardURL string) (*feed, error) {
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/v1/stream"
 	return &feed{
-		url:     u.String(),
-		st:      feedState{Since: time.Now()},
-		changed: make(chan struct{}, 1),
+		url: u.String(),
+		st:  feedState{Since: time.Now()},
 	}, nil
+}
+
+// subscribe returns a channel that receives a value after the feed's
+// state changes. Notifications coalesce.
+func (f *feed) subscribe() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := make(chan struct{}, 1)
+	f.subs = append(f.subs, c)
+	return c
 }
 
 func (f *feed) state() feedState {
@@ -66,10 +75,13 @@ func (f *feed) update(fn func(*feedState)) {
 	if f.st.Connected != was {
 		f.st.Since = time.Now()
 	}
+	subs := f.subs
 	f.mu.Unlock()
-	select {
-	case f.changed <- struct{}{}:
-	default:
+	for _, c := range subs {
+		select {
+		case c <- struct{}{}:
+		default:
+		}
 	}
 }
 

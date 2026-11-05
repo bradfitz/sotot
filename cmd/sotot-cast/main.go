@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -39,6 +40,7 @@ var (
 	flagTV        = flag.String("tv", "", "friendly name of the Cast device, or its host:port")
 	flagList      = flag.Bool("list", false, "list Cast devices on the LAN and exit")
 	flagDashboard = flag.String("dashboard", "", "URL of the sotot dashboard to show, e.g. http://127.0.0.1:8080; if empty, a test pattern")
+	flagDisplay   = flag.String("display", "", "ID of this display in sotot's config, which switches it on and off from the dashboard; if empty, always on")
 	flagTZ        = flag.String("tz", "", "time zone for displaying times (default local)")
 	flagSnapshot  = flag.String("snapshot", "", "write one rendered frame to this PNG file and exit, without casting")
 	flagMode      = flag.String("mode", "mp4", "how to cast: mp4, png, gif, multipart, hls, or url")
@@ -47,8 +49,12 @@ var (
 	flagPort      = flag.Int("http-port", 0, "TCP port for serving frames to the device; 0 picks one")
 	flagFPS       = flag.Int("fps", 5, "hls mode: video frame rate")
 	flagSegSecs   = flag.Int("segment-secs", 2, "hls mode: segment duration in seconds")
+	flagFFmpeg    = flag.String("ffmpeg", "ffmpeg", "path to the ffmpeg binary")
 	flagCRF       = flag.String("crf", "16", "hls mode: x264 constant rate factor; lower is higher quality")
 	flagVerbose   = flag.Bool("v", false, "verbose logging")
+
+	flagDebugReload = flag.Duration("debug-reload-after", 0, "for testing recovery: reload the stream after this long playing")
+	flagDebugDrop   = flag.Duration("debug-drop-after", 0, "for testing recovery: abruptly drop the device's first video download after this long")
 
 	flagMaxLag      = flag.Float64("max-lag", 4, "mp4 mode: speed up playback when it's more than this many seconds behind live")
 	flagTargetLag   = flag.Float64("target-lag", 3, "mp4 mode: return to normal speed when playback is this close to live")
@@ -102,6 +108,7 @@ func main() {
 
 	var render func(time.Time) *image.RGBA
 	var changed <-chan struct{} // besides the clock
+	var fd *feed                // nil without --dashboard
 	if *flagDashboard != "" {
 		loc := time.Local
 		if *flagTZ != "" {
@@ -109,14 +116,13 @@ func main() {
 				log.Fatalf("--tz: %v", err)
 			}
 		}
-		fd, err := newFeed(*flagDashboard)
-		if err != nil {
+		if fd, err = newFeed(*flagDashboard); err != nil {
 			log.Fatal(err)
 		}
 		go fd.run(ctx)
 		tv := newTVRenderer(w, h, loc)
 		render = func(now time.Time) *image.RGBA { return tv.render(now, fd.state()) }
-		changed = fd.changed
+		changed = fd.subscribe()
 	} else {
 		tp := newRenderer(w, h, *flagMode)
 		render = tp.render
@@ -179,7 +185,7 @@ func main() {
 	mux.HandleFunc("/stream.gif", hb.serveGIF)
 	mux.HandleFunc("/stream.mpng", hb.serveMultipart)
 	var media cast.Media
-	var liveStart time.Time // for mp4, when media time 0 was published
+	var live *mp4Streamer // for mp4
 	switch *flagMode {
 	case "gif":
 		media = cast.Media{URL: baseURL + "/stream.gif", ContentType: "image/gif"}
@@ -207,15 +213,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("starting ffmpeg: %v", err)
 		}
-		mux.Handle("/stream.mp4", s)
+		mux.Handle("/stream/", s)
 		log.Printf("waiting for ffmpeg to produce video")
 		start := time.Now()
 		if err := s.waitReady(ctx); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("first fragment after %v", time.Since(start).Round(time.Millisecond))
-		media = cast.Media{URL: baseURL + "/stream.mp4", ContentType: "video/mp4", StreamType: "LIVE"}
-		liveStart = s.start
+		media = cast.Media{ContentType: "video/mp4", StreamType: "LIVE"} // URL per LOAD
+		live = s
 	case "url":
 		media = cast.Media{URL: *flagURL, ContentType: *flagContentType, StreamType: *flagStreamType}
 	}
@@ -223,31 +229,99 @@ func main() {
 	go http.Serve(ln, mux)
 	log.Printf("serving at %s", baseURL)
 
+	ctl := newController(fd, *flagDisplay, *flagDashboard)
+	go ctl.heartbeat(ctx)
+	fresh := false
+	var lastBusy time.Time // when the TV was last seen in use by another app
 	for ctx.Err() == nil {
-		var err error
-		if *flagMode == "png" {
-			err = runStills(ctx, addr, baseURL, hb)
-		} else {
-			err = runStream(ctx, addr, media, liveStart)
+		// Wait until the display is switched on.
+		if !ctl.wantOn() {
+			ctl.report("Off")
+			ctl.waitChange(ctx, 0)
+			continue
 		}
+		// Don't take the TV from someone using it, or the moment they
+		// stop: they may just be picking something else to watch.
+		app, err := tvInUse(ctx, addr)
+		switch {
+		case err != nil:
+			log.Printf("cast: checking the TV: %v", err)
+			ctl.report("Can't reach the TV")
+			ctl.waitChange(ctx, 30*time.Second)
+			continue
+		case app != "":
+			if lastBusy.IsZero() {
+				log.Printf("cast: TV in use by %s; waiting", app)
+			}
+			lastBusy = time.Now()
+			ctl.report("Waiting: TV is in use by " + app)
+			ctl.waitChange(ctx, time.Minute)
+			continue
+		case !lastBusy.IsZero() && time.Since(lastBusy) < idleGrace:
+			ctl.report("Waiting for the TV to stay free")
+			ctl.waitChange(ctx, idleGrace-time.Since(lastBusy))
+			continue
+		}
+		lastBusy = time.Time{}
+
+		// Cast until something ends it, including being switched off.
+		runCtx, cancel := context.WithCancel(ctx)
+		go func() {
+			for runCtx.Err() == nil && ctl.wantOn() {
+				ctl.waitChange(runCtx, 0)
+			}
+			cancel() // switched off: cleanup stops our receiver session
+		}()
+		ctl.report("Starting")
+		if *flagMode == "png" {
+			err = runStills(runCtx, addr, baseURL, hb, fresh)
+		} else {
+			m := media
+			if live != nil {
+				// Each LOAD gets a new session: its own virtual file,
+				// starting at the live edge.
+				m.URL = baseURL + live.newSession()
+			}
+			err = runStream(runCtx, addr, m, live, fresh, ctl.report)
+		}
+		cancel()
+		// If the receiver's player failed, start the next attempt with
+		// a freshly launched receiver rather than reusing the player.
+		fresh = errors.Is(err, errPlayerFailed)
 		if ctx.Err() != nil {
 			break
 		}
+		if !ctl.wantOn() {
+			continue
+		}
 		if err == cast.ErrSessionEnded {
-			log.Fatalf("receiver session ended (another app took over the TV?); exiting")
+			// Another app took over, or the receiver quit. The next
+			// pass checks which, before casting again.
+			log.Printf("cast: receiver session ended")
+		} else if err != nil {
+			log.Printf("cast: %v; retrying in 5s", err)
 		}
-		log.Printf("cast: %v; reconnecting in 5s", err)
-		select {
-		case <-ctx.Done():
-		case <-time.After(5 * time.Second):
-		}
+		ctl.waitChange(ctx, 5*time.Second)
 	}
 }
 
-// connect dials the device and launches the media receiver. The returned
-// cleanup func stops the receiver if ctx is done, so the TV returns to its
-// idle screen on exit, and closes the connection.
-func connect(ctx context.Context, addr string) (*cast.Conn, *cast.Session, func(), error) {
+// idleGrace is how long the TV must be free of other apps before
+// casting resumes.
+const idleGrace = time.Minute
+
+// stuckLimit is how long playback may stay at the same position before
+// the player is presumed wedged.
+const stuckLimit = 45 * time.Second
+
+// errPlayerFailed means the receiver's player stopped playing the
+// stream: it went idle, or got stuck.
+var errPlayerFailed = errors.New("receiver player failed")
+
+// connect dials the device and launches the media receiver, restarting
+// it if fresh. The returned cleanup func stops the receiver if ctx is
+// done, so the TV returns to its idle screen on exit, and closes the
+// connection.
+func connect(ctx context.Context, addr string, fresh bool) (*cast.Conn, *cast.Session, func(), error) {
 	c, err := cast.Dial(ctx, addr)
 	if err != nil {
 		return nil, nil, nil, err
@@ -255,6 +329,13 @@ func connect(ctx context.Context, addr string) (*cast.Conn, *cast.Session, func(
 	c.Logf = log.Printf
 	c.LogRaw = *flagVerbose
 	sess, err := c.Launch(ctx, cast.DefaultMediaReceiver)
+	if err == nil && fresh {
+		// Launching a running app joins it; stop it to get a new one.
+		log.Printf("restarting receiver session %s", sess.SessionID)
+		if err = c.Stop(ctx, sess); err == nil {
+			sess, err = c.Launch(ctx, cast.DefaultMediaReceiver)
+		}
+	}
 	if err != nil {
 		c.Close()
 		return nil, nil, nil, err
@@ -277,8 +358,8 @@ func connect(ctx context.Context, addr string) (*cast.Conn, *cast.Session, func(
 }
 
 // runStills LOADs each newly published frame as its own image.
-func runStills(ctx context.Context, addr, baseURL string, hb *hub) error {
-	c, sess, cleanup, err := connect(ctx, addr)
+func runStills(ctx context.Context, addr, baseURL string, hb *hub, fresh bool) error {
+	c, sess, cleanup, err := connect(ctx, addr, fresh)
 	if err != nil {
 		return err
 	}
@@ -305,13 +386,12 @@ func runStills(ctx context.Context, addr, baseURL string, hb *hub) error {
 
 // runStream LOADs a single never-ending stream and waits.
 //
-// If liveStart is non-zero, it's the wall time corresponding to media time
-// zero, and runStream keeps playback near the live edge. The receiver
+// If live is non-nil, runStream keeps playback near its live edge. The receiver
 // buffers several seconds before it starts playing and would otherwise
 // stay that far behind forever. Seeking doesn't work in an endless stream,
 // so it catches up by briefly playing faster than real time.
-func runStream(ctx context.Context, addr string, m cast.Media, liveStart time.Time) error {
-	c, sess, cleanup, err := connect(ctx, addr)
+func runStream(ctx context.Context, addr string, m cast.Media, live *mp4Streamer, fresh bool, report func(string)) error {
+	c, sess, cleanup, err := connect(ctx, addr, fresh)
 	if err != nil {
 		return err
 	}
@@ -333,9 +413,14 @@ func runStream(ctx context.Context, addr string, m cast.Media, liveStart time.Ti
 	// The receiver sends status updates on its own while playing, about
 	// every second; polling is only a fallback. Frequent polling may make
 	// the receiver flash its playback bar.
+	var debugReload <-chan time.Time
+	if *flagDebugReload > 0 {
+		debugReload = time.After(*flagDebugReload)
+	}
 	poll := time.NewTicker(30 * time.Second)
 	defer poll.Stop()
 	var lastLog time.Time
+	lastPos, lastAdvance := -1.0, time.Now()
 	wantRate := 1.0
 	setRate := func(st cast.MediaStatus, rate float64, why string) {
 		if rate == wantRate {
@@ -359,16 +444,30 @@ func runStream(ctx context.Context, addr string, m cast.Media, liveStart time.Ti
 			return cast.ErrSessionEnded
 		case <-poll.C:
 			go c.RequestMediaStatus(ctx, sess)
+		case <-debugReload:
+			return errors.New("debug reload")
 		case st := <-statusc:
 			if st.MediaSessionID != mediaID {
 				continue // about earlier media, such as what our LOAD replaced
 			}
+			if *flagVerbose {
+				log.Printf("status: %s t=%.2fs rate %v idle=%q", st.PlayerState, st.CurrentTime, st.PlaybackRate, st.IdleReason)
+			}
 			if st.PlayerState == "IDLE" && st.IdleReason != "" {
 				// The stream should never end; reload it. (IDLE without
 				// a reason is normal right after LOAD, before buffering.)
-				return fmt.Errorf("receiver player went idle (%s)", st.IdleReason)
+				return fmt.Errorf("%w: went idle (%s)", errPlayerFailed, st.IdleReason)
 			}
-			if liveStart.IsZero() {
+			// A live stream's position should always advance.
+			if st.CurrentTime > lastPos+0.1 {
+				lastPos, lastAdvance = st.CurrentTime, time.Now()
+			} else if time.Since(lastAdvance) > stuckLimit {
+				return fmt.Errorf("%w: stuck at %.1fs for %v", errPlayerFailed, lastPos, stuckLimit)
+			}
+			if st.PlayerState == "PLAYING" && report != nil {
+				report("Casting")
+			}
+			if live == nil {
 				continue
 			}
 			if st.PlayerState == "BUFFERING" {
@@ -378,7 +477,14 @@ func runStream(ctx context.Context, addr string, m cast.Media, liveStart time.Ti
 			if st.PlayerState != "PLAYING" {
 				continue
 			}
-			lag := time.Since(liveStart).Seconds() - st.CurrentTime
+			if st.CurrentTime < live.sessionStart(m.URL) {
+				continue // a placeholder position while playback starts
+			}
+			lag := live.liveMediaTime() - st.CurrentTime
+			if *flagVerbose {
+				log.Printf("status: t=%.2fs rate %v; live media time %.2fs; session started at %.2fs",
+					st.CurrentTime, st.PlaybackRate, live.liveMediaTime(), live.sessionStart(m.URL))
+			}
 			if time.Since(lastLog) > 10*time.Second {
 				log.Printf("playback is %.1fs behind live (t=%.1fs, rate %v)", lag, st.CurrentTime, st.PlaybackRate)
 				lastLog = time.Now()

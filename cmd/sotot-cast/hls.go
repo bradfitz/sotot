@@ -34,7 +34,7 @@ func startHLS(ctx context.Context, h *hub, width, height, fps int) (*hlsEncoder,
 		"-master_pl_name", "master.m3u8",
 		filepath.Join(dir, "live.m3u8"),
 	)
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, *flagFFmpeg, args...)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

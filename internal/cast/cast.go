@@ -157,12 +157,33 @@ type envelope struct {
 
 type receiverStatus struct {
 	Status struct {
-		Applications []struct {
-			AppID       string `json:"appId"`
-			SessionID   string `json:"sessionId"`
-			TransportID string `json:"transportId"`
-		} `json:"applications"`
+		Applications []App `json:"applications"`
 	} `json:"status"`
+}
+
+// App is an application running on a Cast device.
+type App struct {
+	AppID       string `json:"appId"`
+	DisplayName string `json:"displayName"` // e.g. "Netflix", "Backdrop"
+	SessionID   string `json:"sessionId"`
+	TransportID string `json:"transportId"`
+	// IsIdleScreen is whether it's the device's idle screen (ambient
+	// mode / Backdrop), which anyone may replace.
+	IsIdleScreen bool   `json:"isIdleScreen"`
+	StatusText   string `json:"statusText"`
+}
+
+// Apps returns the applications currently running on the device.
+func (c *Conn) Apps(ctx context.Context) ([]App, error) {
+	r, err := c.request(ctx, receiverID, nsReceiver, map[string]any{"type": "GET_STATUS"})
+	if err != nil {
+		return nil, err
+	}
+	var rs receiverStatus
+	if err := json.Unmarshal(r, &rs); err != nil {
+		return nil, err
+	}
+	return rs.Status.Applications, nil
 }
 
 func (c *Conn) readLoop() {

@@ -76,6 +76,7 @@ func runCmd(args []string) error {
 	stateDir := fs.String("state-dir", defaultStateDir(), "directory for cached source data and tsnet state")
 	listen := fs.String("listen", "127.0.0.1:8080", "dashboard listen address")
 	useTsnet := fs.Bool("tsnet", false, "serve the dashboard on a Tailscale tailnet via tsnet instead of a host TCP listener")
+	internalListen := fs.String("internal-listen", "", "also serve the dashboard on this plain TCP address, e.g. :8080 for other programs in a cluster (sotot-cast); unlike --listen, works alongside --tsnet")
 	tsnetHostname := fs.String("tsnet-hostname", "sotot", "tsnet mode: tailnet host name")
 	tz := fs.String("tz", "", "time zone for displaying times (default local)")
 	verboseTailcat := fs.Bool("verbose-tailcat", false, "log tailcat transport details")
@@ -88,7 +89,7 @@ func runCmd(args []string) error {
 			return fmt.Errorf("--tz: %w", err)
 		}
 	}
-	srcs, err := loadConfig(*configPath)
+	srcs, displays, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -103,7 +104,7 @@ func runCmd(args []string) error {
 	for _, s := range srcs {
 		scfg = append(scfg, state.SourceConfig{ID: s.ID, Name: s.Name})
 	}
-	st, err := state.New(state.Config{Sources: scfg, CacheDir: filepath.Join(*stateDir, "cache")})
+	st, err := state.New(state.Config{Sources: scfg, Displays: displays, CacheDir: filepath.Join(*stateDir, "cache")})
 	if err != nil {
 		return err
 	}
@@ -159,6 +160,14 @@ func runCmd(args []string) error {
 	}
 	hs := &http.Server{Handler: ds, ReadHeaderTimeout: 10 * time.Second}
 	go hs.Serve(ln)
+	if *internalListen != "" {
+		iln, err := net.Listen("tcp", *internalListen)
+		if err != nil {
+			return fmt.Errorf("--internal-listen: %w", err)
+		}
+		log.Printf("dashboard also at http://%s/ (internal)", iln.Addr())
+		go hs.Serve(iln)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -245,7 +254,7 @@ func addressCmd(args []string) error {
 		fs.Usage()
 		os.Exit(2)
 	}
-	srcs, err := loadConfig(*configPath)
+	srcs, _, err := loadConfig(*configPath)
 	if err != nil {
 		return err
 	}

@@ -15,6 +15,9 @@ import (
 type Config struct {
 	Version int            `json:"version"`
 	Sources []SourceConfig `json:"sources"`
+	// Displays are TVs (driven by sotot-cast) that can be switched on
+	// and off from the dashboard.
+	Displays []state.DisplayConfig `json:"displays,omitempty"`
 }
 
 // SourceConfig configures one source.
@@ -42,17 +45,25 @@ type loadedSource struct {
 	paths      []string
 }
 
-func loadConfig(path string) ([]loadedSource, error) {
+func loadConfig(path string) ([]loadedSource, []state.DisplayConfig, error) {
+	srcs, cfg, err := loadSources(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcs, cfg.Displays, nil
+}
+
+func loadSources(path string) ([]loadedSource, *Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if cfg.Version != 1 {
-		return nil, fmt.Errorf("%s: unsupported config version %d", path, cfg.Version)
+		return nil, nil, fmt.Errorf("%s: unsupported config version %d", path, cfg.Version)
 	}
 	dir := filepath.Dir(path)
 	var srcs []loadedSource
@@ -60,19 +71,19 @@ func loadConfig(path string) ([]loadedSource, error) {
 	seenFile := map[string]string{}
 	for _, sc := range cfg.Sources {
 		if !state.ValidSourceID(sc.ID) {
-			return nil, fmt.Errorf("%s: invalid source id %q (want [a-z0-9][a-z0-9_-]{0,63})", path, sc.ID)
+			return nil, nil, fmt.Errorf("%s: invalid source id %q (want [a-z0-9][a-z0-9_-]{0,63})", path, sc.ID)
 		}
 		if seen[sc.ID] {
-			return nil, fmt.Errorf("%s: duplicate source id %q", path, sc.ID)
+			return nil, nil, fmt.Errorf("%s: duplicate source id %q", path, sc.ID)
 		}
 		seen[sc.ID] = true
 		if len(sc.Listeners) == 0 {
-			return nil, fmt.Errorf("%s: source %q has no listeners", path, sc.ID)
+			return nil, nil, fmt.Errorf("%s: source %q has no listeners", path, sc.ID)
 		}
 		ls := loadedSource{SourceConfig: sc}
 		for _, lc := range sc.Listeners {
 			if lc.IdentityFile == "" {
-				return nil, fmt.Errorf("%s: source %q: listener without identity_file", path, sc.ID)
+				return nil, nil, fmt.Errorf("%s: source %q: listener without identity_file", path, sc.ID)
 			}
 			p := lc.IdentityFile
 			if !filepath.IsAbs(p) {
@@ -80,12 +91,12 @@ func loadConfig(path string) ([]loadedSource, error) {
 			}
 			if other, ok := seenFile[p]; ok {
 				// Sharing would let one source publish as another.
-				return nil, fmt.Errorf("%s: identity file %s used by both %q and %q", path, lc.IdentityFile, other, sc.ID)
+				return nil, nil, fmt.Errorf("%s: identity file %s used by both %q and %q", path, lc.IdentityFile, other, sc.ID)
 			}
 			seenFile[p] = sc.ID
 			id, err := ingest.LoadIdentity(p)
 			if err != nil {
-				return nil, fmt.Errorf("source %q: %w", sc.ID, err)
+				return nil, nil, fmt.Errorf("source %q: %w", sc.ID, err)
 			}
 			ls.identities = append(ls.identities, id)
 			ls.paths = append(ls.paths, p)
@@ -93,7 +104,7 @@ func loadConfig(path string) ([]loadedSource, error) {
 		srcs = append(srcs, ls)
 	}
 	if len(srcs) == 0 {
-		return nil, errors.New("no sources configured")
+		return nil, nil, errors.New("no sources configured")
 	}
-	return srcs, nil
+	return srcs, &cfg, nil
 }
