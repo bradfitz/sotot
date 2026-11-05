@@ -213,15 +213,18 @@ func (w *watcher) thing(id string, info threadInfo) protocol.Thing {
 	if subject == "" {
 		subject = "(no subject)"
 	}
+	// The sender leads, since the TV shows only titles and cuts long ones
+	// off at the end: "Pat Landlord: Lease renewal".
+	title := subject
+	if info.from != "" {
+		title = info.from + ": " + subject
+	}
 	t := protocol.Thing{
 		ID:    "thread:" + id,
-		Title: truncate(subject, 300),
+		Title: truncate(title, 300),
 		Kind:  "email",
 		URL:   fmt.Sprintf("https://mail.google.com/mail/u/%d/#inbox/%s", w.account, id),
 		Tags:  []string{"gmail"},
-	}
-	if info.from != "" {
-		t.Body = "From: " + truncate(info.from, 300)
 	}
 	if !info.last.IsZero() {
 		at := info.last

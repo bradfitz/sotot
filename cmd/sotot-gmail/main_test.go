@@ -69,11 +69,11 @@ func TestPoll(t *testing.T) {
 		t.Fatalf("summary %q, %d things", sum, len(things))
 	}
 	t1 := things[0]
-	if t1.ID != "thread:t1" || t1.Title != "Lease renewal" || t1.Body != "From: bob@example.com" ||
+	if t1.ID != "thread:t1" || t1.Title != "bob@example.com: Lease renewal" ||
 		t1.URL != "https://mail.google.com/mail/u/1/#inbox/t1" || !t1.AttentionAt.Equal(time.UnixMilli(1762390000000)) {
 		t.Errorf("t1 = %+v", t1)
 	}
-	if t2 := things[1]; t2.Title != "(no subject)" || t2.Body != "From: noreply@example.com" {
+	if t2 := things[1]; t2.Title != "noreply@example.com: (no subject)" {
 		t.Errorf("t2 = %+v", t2)
 	}
 	for _, th := range things {
