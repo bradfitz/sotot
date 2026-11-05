@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"time"
 	_ "time/tzdata" // so sources and the daemon agree on valid time zones
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -38,6 +39,7 @@ const (
 	MaxTagBytes      = 64
 	MaxValidSeconds  = 10 * 366 * 24 * 60 * 60 // ten years
 	MaxErrorBytes    = 1024
+	MaxSummaryBytes  = 64
 	SnapshotDeadline = 30 * time.Second // to send the first snapshot after connecting
 )
 
@@ -81,7 +83,18 @@ type Thing struct {
 
 	// Tags are optional descriptive labels with no built-in meaning.
 	Tags []string `json:"tags,omitempty"`
+
+	// Priority is how pressing the source thinks the thing is:
+	// PriorityLow, PriorityHigh, or empty for normal. A source may raise
+	// it over time, e.g. as a deadline approaches.
+	Priority string `json:"priority,omitempty"`
 }
+
+// Thing priorities. The empty string means normal.
+const (
+	PriorityLow  = "low"
+	PriorityHigh = "high"
+)
 
 // Validate reports whether t is a valid thing.
 func (t *Thing) Validate() error {
@@ -135,6 +148,11 @@ func (t *Thing) validate() error {
 			return fmt.Errorf("invalid tag %q", tag)
 		}
 	}
+	switch t.Priority {
+	case "", PriorityLow, PriorityHigh:
+	default:
+		return fmt.Errorf("unknown priority %q", t.Priority)
+	}
 	if t.EndsAt != nil && t.StartsAt == nil {
 		return errors.New("ends_at without starts_at")
 	}
@@ -187,6 +205,10 @@ type Snapshot struct {
 	// Required; zero means stale as soon as the source disconnects.
 	ValidForSeconds *int64  `json:"valid_for_seconds"`
 	Things          []Thing `json:"things"`
+	// Summary is an optional very short description of the source's
+	// state, such as "15 domains", shown in place of "Connected" on the
+	// dashboard. A snapshot without it clears any previous summary.
+	Summary string `json:"summary,omitempty"`
 }
 
 // Delta atomically upserts and removes things. An upsert replaces the
@@ -199,6 +221,8 @@ type Delta struct {
 	// ValidForSeconds, if set, renews the validity of the whole
 	// resulting set. If absent, the expiry is unchanged.
 	ValidForSeconds *int64 `json:"valid_for_seconds,omitempty"`
+	// Summary, if set, replaces the source's summary (see Snapshot).
+	Summary *string `json:"summary,omitempty"`
 }
 
 // Refresh renews the validity of the current set without changing it.
@@ -300,6 +324,9 @@ func (m *Snapshot) Validate() error {
 	if err := validateValidFor(m.ValidForSeconds, true); err != nil {
 		return err
 	}
+	if err := ValidateSummary(m.Summary); err != nil {
+		return err
+	}
 	if len(m.Things) > MaxThings {
 		return fmt.Errorf("snapshot has %d things; max is %d", len(m.Things), MaxThings)
 	}
@@ -324,6 +351,11 @@ func (m *Delta) Validate() error {
 	}
 	if err := validateValidFor(m.ValidForSeconds, false); err != nil {
 		return err
+	}
+	if m.Summary != nil {
+		if err := ValidateSummary(*m.Summary); err != nil {
+			return err
+		}
 	}
 	if len(m.Upsert)+len(m.Remove) > MaxThings {
 		return fmt.Errorf("delta has %d changes; max is %d", len(m.Upsert)+len(m.Remove), MaxThings)
@@ -357,6 +389,23 @@ func (m *Refresh) Validate() error {
 		return err
 	}
 	return validateValidFor(m.ValidForSeconds, true)
+}
+
+// ValidateSummary reports whether s is a valid source summary: short,
+// printable, one line.
+func ValidateSummary(s string) error {
+	if len(s) > MaxSummaryBytes {
+		return fmt.Errorf("summary longer than %d bytes", MaxSummaryBytes)
+	}
+	if !utf8.ValidString(s) {
+		return errors.New("summary is not valid UTF-8")
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return errors.New("summary contains control characters")
+		}
+	}
+	return nil
 }
 
 // Seconds returns d as a ValidForSeconds value, rounding up.

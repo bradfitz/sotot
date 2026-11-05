@@ -22,6 +22,7 @@ type cacheRecord struct {
 	Version            int              `json:"version"`
 	SourceID           string           `json:"source_id"`
 	HasSnapshot        bool             `json:"has_snapshot"`
+	Summary            string           `json:"summary,omitempty"`
 	ExpiresAt          *time.Time       `json:"expires_at,omitempty"`
 	DataRevision       uint64           `json:"data_revision"`
 	LastConnectedAt    *time.Time       `json:"last_connected_at,omitempty"`
@@ -36,6 +37,7 @@ func (src *source) record() *cacheRecord {
 		Version:            cacheVersion,
 		SourceID:           src.cfg.ID,
 		HasSnapshot:        src.hasSnapshot,
+		Summary:            src.summary,
 		ExpiresAt:          timePtr(src.expiresAt),
 		DataRevision:       src.dataRevision,
 		LastConnectedAt:    timePtr(src.lastConnectedAt),
@@ -47,6 +49,7 @@ func (src *source) record() *cacheRecord {
 
 func (src *source) restore(rec *cacheRecord) {
 	src.hasSnapshot = rec.HasSnapshot
+	src.summary = rec.Summary
 	if rec.ExpiresAt != nil {
 		src.expiresAt = *rec.ExpiresAt // as written; a restart never extends it
 	}

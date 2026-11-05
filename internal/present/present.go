@@ -2,9 +2,9 @@
 // ordered entries with human-readable times, and source status labels.
 // The browser dashboard and the TV view share it.
 //
-// The ordering is deliberately simple: things with a time come first,
-// earliest first, then the rest. It's a way to display the dates sources
-// supply, not an urgency ranking.
+// The ordering is deliberately simple: by the priority sources assign
+// (high, normal, low), then things with a time, earliest first, then the
+// rest. sotot doesn't rank urgency itself.
 package present
 
 import (
@@ -51,6 +51,9 @@ func Entries(v state.View, now time.Time, loc *time.Location) []Entry {
 		}
 	}
 	slices.SortStableFunc(es, func(a, b Entry) int {
+		if c := cmp.Compare(priorityRank(a.Thing.Priority), priorityRank(b.Thing.Priority)); c != 0 {
+			return c
+		}
 		switch {
 		case a.When != nil && b.When != nil:
 			if c := a.When.At.Compare(b.When.At); c != 0 {
@@ -68,6 +71,17 @@ func Entries(v state.View, now time.Time, loc *time.Location) []Entry {
 		)
 	})
 	return es
+}
+
+// priorityRank orders priorities for display: high, normal, low.
+func priorityRank(p string) int {
+	switch p {
+	case protocol.PriorityHigh:
+		return 0
+	case protocol.PriorityLow:
+		return 2
+	}
+	return 1
 }
 
 // when picks the time to show: a deadline, else an event start, else a
@@ -183,7 +197,9 @@ func StatusLabel(sv state.SourceView) string {
 	var s string
 	switch sv.Status {
 	case state.Connected:
-		s = "Connected"
+		// A live source's own summary ("15 domains") says more than
+		// "Connected", in less space.
+		s = cmp.Or(sv.Summary, "Connected")
 	case state.Fresh:
 		s = "Fresh, disconnected"
 	case state.Stale:

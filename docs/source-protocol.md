@@ -44,6 +44,7 @@ reconnects and source restarts.
 | `date` | `YYYY-MM-DD` | A date-only obligation or all-day event. Requires `time_zone`. |
 | `time_zone` | IANA zone | Zone for interpreting `date`; only with `date`. |
 | `tags` | string array | Labels with no built-in meaning; ≤ 32, each ≤ 64 bytes. |
+| `priority` | `"low"` or `"high"` | How pressing the thing is; absent means normal. High sorts first and is highlighted; low sorts last and is dimmed. A source may change it over time, e.g. as a deadline approaches. |
 
 Timestamps are RFC 3339 with an explicit offset (`Z` or `-07:00`). A
 `date` is not an instant, and must not be combined with `due_at` or
@@ -70,6 +71,11 @@ An ID may appear only once per message.
 ```json
 {"type":"delta","seq":2,"upsert":[{"id":"pr:123","title":"Review connection cleanup","kind":"pull_request"}],"remove":["pr:122"]}
 ```
+
+A snapshot may include **`summary`**, a very short description of the
+source's state (≤ 64 bytes, one line), such as `"15 domains"`. The
+dashboard shows it in place of "Connected". A delta may change it with its
+own `summary` field; a snapshot without one clears it.
 
 **`refresh`** renews validity without changing things:
 

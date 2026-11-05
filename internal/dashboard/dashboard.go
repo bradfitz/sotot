@@ -13,16 +13,20 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bradfitz/sotot/internal/present"
 	"github.com/bradfitz/sotot/internal/state"
+	"github.com/bradfitz/sotot/protocol"
 	"github.com/coder/websocket"
 )
 
@@ -60,8 +64,9 @@ func (s *Server) logf(format string, args ...any) {
 // Init prepares the server. It must be called before ServeHTTP.
 func (s *Server) Init() error {
 	t, err := template.New("").Funcs(template.FuncMap{
-		"statusLabel":  present.StatusLabel,
-		"statusDetail": present.StatusDetail,
+		"statusLabel":   present.StatusLabel,
+		"statusDetail":  present.StatusDetail,
+		"displayStatus": displayStatus,
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return err
@@ -81,6 +86,8 @@ func (s *Server) Init() error {
 	s.mux.HandleFunc("GET /ws", s.serveViewStream)
 	s.mux.HandleFunc("GET /api/v1/view", s.serveJSON)
 	s.mux.HandleFunc("GET /api/v1/stream", s.serveJSONStream)
+	s.mux.HandleFunc("POST /displays/{id}", s.serveDisplaySwitch)
+	s.mux.HandleFunc("POST /api/v1/displays/{id}/status", s.serveDisplayStatus)
 	s.mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(s.Static)))
 	if s.haveWasm {
 		// The Wasm client is about 2 MB, a third of that gzipped.
@@ -241,4 +248,85 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, encode func(stat
 		}
 		v = s.Store.View()
 	}
+}
+
+// displayStatus describes a display for the dashboard, noting when its
+// driver has gone quiet.
+func displayStatus(d state.DisplayView, now time.Time) string {
+	st := "Off"
+	if d.Enabled {
+		st = "On"
+	}
+	switch {
+	case d.StatusAt == nil:
+		st += " · no report from its driver yet"
+	case now.Sub(*d.StatusAt) > 3*time.Minute:
+		st += " · no report from its driver since " + present.Ago(*d.StatusAt, now)
+	case d.Status != "":
+		st += " · " + d.Status
+	}
+	return st
+}
+
+// sameOrigin reports whether a browser request came from the dashboard's
+// own pages. Requests from other sites are refused, so they can't flip
+// switches. If requireBrowser, a request with no browser provenance
+// headers at all is refused too.
+func sameOrigin(r *http.Request, requireBrowser bool) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		return site == "same-origin"
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		return err == nil && u.Host == r.Host
+	}
+	return !requireBrowser
+}
+
+// serveDisplaySwitch handles the dashboard's on/off buttons for displays.
+func (s *Server) serveDisplaySwitch(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r, true) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	enabled, err := strconv.ParseBool(r.FormValue("enabled"))
+	if err != nil {
+		http.Error(w, "bad enabled value", http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.SetDisplayEnabled(r.PathValue("id"), enabled); err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, state.ErrUnknownDisplay) {
+			code = http.StatusNotFound
+		}
+		http.Error(w, err.Error(), code)
+		return
+	}
+	s.logf("dashboard: display %s switched %s by %s", r.PathValue("id"), map[bool]string{true: "on", false: "off"}[enabled], r.RemoteAddr)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// serveDisplayStatus records a display driver's (sotot-cast's) report of
+// what it's doing.
+func (s *Server) serveDisplayStatus(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r, false) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		http.Error(w, "bad JSON", http.StatusBadRequest)
+		return
+	}
+	if err := protocol.ValidateSummary(req.Status); err != nil { // same rules: short, one line
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.SetDisplayStatus(r.PathValue("id"), req.Status); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sync"
@@ -45,9 +46,17 @@ type SourceConfig struct {
 	Name string // display name
 }
 
+// DisplayConfig is a configured display, such as a TV driven by
+// sotot-cast, which can be switched on and off from the dashboard.
+type DisplayConfig struct {
+	ID   string `json:"id"` // see ValidSourceID
+	Name string `json:"name"`
+}
+
 // Config configures a Store.
 type Config struct {
-	Sources []SourceConfig
+	Sources  []SourceConfig
+	Displays []DisplayConfig
 
 	// CacheDir, if non-empty, is where per-source JSON cache files are
 	// read at startup and written after changes.
@@ -76,16 +85,20 @@ type Store struct {
 	mu       sync.Mutex
 	order    []string // source IDs in configuration order
 	sources  map[string]*source
+	displays []*display // in configuration order
 	nextGen  uint64
 	revision uint64
 	subs     map[*Subscription]bool
 	closed   bool
+
+	displaysFile string // where display switches persist; "" if none
 }
 
 type source struct {
 	cfg SourceConfig
 
 	things       map[string]protocol.Thing
+	summary      string // the source's own short status, like "15 domains"
 	hasSnapshot  bool
 	expiresAt    time.Time // zero if never had a snapshot
 	dataRevision uint64
@@ -138,7 +151,21 @@ func New(cfg Config) (*Store, error) {
 		s.sources[sc.ID] = &source{cfg: sc, things: map[string]protocol.Thing{}, pending: map[uint64]func(){}}
 	}
 
+	seenDisplay := map[string]bool{}
+	for _, dc := range cfg.Displays {
+		if !ValidSourceID(dc.ID) {
+			return nil, fmt.Errorf("invalid display ID %q", dc.ID)
+		}
+		if seenDisplay[dc.ID] {
+			return nil, fmt.Errorf("duplicate display ID %q", dc.ID)
+		}
+		seenDisplay[dc.ID] = true
+		s.displays = append(s.displays, &display{cfg: dc, enabled: true})
+	}
+
 	if cfg.CacheDir != "" {
+		s.displaysFile = filepath.Join(cfg.CacheDir, displaysFile)
+		s.loadDisplays()
 		c, err := openCache(cfg.CacheDir, s, cmp.Or(cfg.FlushDelay, time.Second))
 		if err != nil {
 			return nil, err
@@ -274,6 +301,7 @@ func (s *Store) Apply(sourceID string, gen uint64, msg any) (protocol.Ack, error
 			things[t.ID] = t
 		}
 		src.things = things
+		src.summary = m.Summary
 		src.hasSnapshot = true
 		if isPending {
 			cancelOld = src.activeCancel
@@ -304,6 +332,9 @@ func (s *Store) Apply(sourceID string, gen uint64, msg any) (protocol.Ack, error
 		}
 		for _, id := range m.Remove {
 			delete(src.things, id)
+		}
+		if m.Summary != nil {
+			src.summary = *m.Summary
 		}
 	case *protocol.Refresh:
 		if isPending {
@@ -414,10 +445,24 @@ func (s *Store) Subscribe() (*Subscription, View) {
 type View struct {
 	// Instance identifies this daemon process; Revision increases with
 	// every change within it.
-	Instance string       `json:"instance"`
-	Revision uint64       `json:"revision"`
-	Now      time.Time    `json:"now"`
-	Sources  []SourceView `json:"sources"`
+	Instance string        `json:"instance"`
+	Revision uint64        `json:"revision"`
+	Now      time.Time     `json:"now"`
+	Sources  []SourceView  `json:"sources"`
+	Displays []DisplayView `json:"displays,omitempty"`
+}
+
+// DisplayView is the state of a display.
+type DisplayView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Enabled is whether the display should show the dashboard, as set
+	// from the dashboard.
+	Enabled bool `json:"enabled"`
+	// Status is what the display's driver last reported doing, like
+	// "Casting" or "Waiting: TV is in use by Netflix".
+	Status   string     `json:"status,omitempty"`
+	StatusAt *time.Time `json:"status_at,omitempty"`
 }
 
 // SourceView is the dashboard state of one source.
@@ -430,6 +475,8 @@ type SourceView struct {
 	Connecting  bool       `json:"connecting,omitempty"`
 	HasSnapshot bool       `json:"has_snapshot"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	// Summary is the source's own very short status, like "15 domains".
+	Summary string `json:"summary,omitempty"`
 
 	LastConnectedAt    *time.Time `json:"last_connected_at,omitempty"`
 	LastDisconnectedAt *time.Time `json:"last_disconnected_at,omitempty"`
@@ -453,6 +500,15 @@ func (s *Store) viewLocked() View {
 	v := View{Instance: s.instance, Revision: s.revision, Now: now.UTC()}
 	for _, id := range s.order {
 		v.Sources = append(v.Sources, s.sources[id].view(now))
+	}
+	for _, d := range s.displays {
+		v.Displays = append(v.Displays, DisplayView{
+			ID:       d.cfg.ID,
+			Name:     cmp.Or(d.cfg.Name, d.cfg.ID),
+			Enabled:  d.enabled,
+			Status:   d.status,
+			StatusAt: timePtr(d.statusAt),
+		})
 	}
 	return v
 }
@@ -486,6 +542,7 @@ func (src *source) view(now time.Time) SourceView {
 		Connecting:         len(src.pending) > 0,
 		HasSnapshot:        src.hasSnapshot,
 		ExpiresAt:          timePtr(src.expiresAt),
+		Summary:            src.summary,
 		LastConnectedAt:    timePtr(src.lastConnectedAt),
 		LastDisconnectedAt: timePtr(src.lastDisconnectedAt),
 		LastMessageAt:      timePtr(src.lastMessageAt),

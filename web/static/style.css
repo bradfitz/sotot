@@ -75,3 +75,40 @@ code { font-size: 0.95em; }
 .thing-body { margin: 6px 0 0; white-space: pre-wrap; color: var(--muted); }
 .empty { color: var(--muted); }
 .empty.warn { color: var(--red); }
+
+/* Priority, as set by the source. Shown with words as well as color. */
+.thing.prio-high { border-left: 6px solid var(--red); }
+.thing.prio-high .relative { color: var(--red); font-weight: 600; }
+.prio-flag {
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--red);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.thing.prio-low { opacity: 0.7; }
+
+/* Displays (TVs) and their on/off switches. */
+.displays { display: flex; flex-wrap: wrap; gap: 8px; margin: -8px 0 20px; }
+.display {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0;
+  padding: 4px 6px 4px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.display-name { font-weight: 600; color: var(--fg); }
+.display button {
+  font: inherit;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+.display button:hover { border-color: var(--muted); }

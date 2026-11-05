@@ -215,15 +215,28 @@ func TestDeltaAndRefresh(t *testing.T) {
 		t.Fatalf("after delta: %+v", sv.Things)
 	}
 
-	ack = mustApply(t, s, "chat", gen, &protocol.Refresh{Type: "refresh", Seq: 3, ValidForSeconds: protocol.Seconds(24 * time.Hour)})
+	sum := "2 unread"
+	mustApply(t, s, "chat", gen, &protocol.Delta{Type: "delta", Seq: 3, Summary: &sum})
+	if got := sourceView(t, s, "chat").Summary; got != "2 unread" {
+		t.Fatalf("summary %q after delta", got)
+	}
+	mustApply(t, s, "chat", gen, &protocol.Delta{Type: "delta", Seq: 4, Remove: []string{"zz"}})
+	if got := sourceView(t, s, "chat").Summary; got != "2 unread" {
+		t.Fatalf("delta without summary changed it to %q", got)
+	}
+
+	ack = mustApply(t, s, "chat", gen, &protocol.Refresh{Type: "refresh", Seq: 5, ValidForSeconds: protocol.Seconds(24 * time.Hour)})
 	if want := clock.Now().Add(24 * time.Hour); !ack.ExpiresAt.Equal(want) {
 		t.Errorf("refresh expiry %v; want %v", ack.ExpiresAt, want)
 	}
 
 	// A new snapshot replaces the whole set.
-	mustApply(t, s, "chat", gen, snapshot(4, time.Hour, thing("z")))
+	mustApply(t, s, "chat", gen, snapshot(6, time.Hour, thing("z")))
 	if got := thingIDs(sourceView(t, s, "chat")); got != "z" {
 		t.Fatalf("after second snapshot: %q; want z", got)
+	}
+	if got := sourceView(t, s, "chat").Summary; got != "" {
+		t.Fatalf("snapshot without summary left %q", got)
 	}
 }
 
@@ -360,5 +373,50 @@ func TestCacheWriteFailure(t *testing.T) {
 	// Real-time operation keeps working.
 	if sv := sourceView(t, s, "bills"); sv.Status != Connected || thingIDs(sv) != "electric" {
 		t.Fatalf("after write failure: %+v", sv)
+	}
+}
+
+func TestDisplays(t *testing.T) {
+	dir := t.TempDir()
+	clock := newFakeClock()
+	newStore := func() *Store {
+		s, err := New(Config{
+			Displays: []DisplayConfig{{ID: "crow", Name: "Office TV"}},
+			CacheDir: dir, Now: clock.Now, AfterFunc: clock.AfterFunc, Logf: t.Logf,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	s := newStore()
+	if d := s.View().Displays; len(d) != 1 || !d[0].Enabled || d[0].Name != "Office TV" {
+		t.Fatalf("initial displays: %+v", d)
+	}
+	sub, _ := s.Subscribe()
+	if err := s.SetDisplayEnabled("crow", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sub.C():
+	default:
+		t.Fatal("switching a display didn't notify")
+	}
+	if err := s.SetDisplayStatus("crow", "Off"); err != nil {
+		t.Fatal(err)
+	}
+	if d := s.View().Displays[0]; d.Enabled || d.Status != "Off" || d.StatusAt == nil {
+		t.Fatalf("after switch: %+v", d)
+	}
+	if err := s.SetDisplayEnabled("nope", true); err != ErrUnknownDisplay {
+		t.Fatalf("unknown display: %v", err)
+	}
+	s.Close()
+
+	// The switch survives a restart; the status doesn't.
+	s = newStore()
+	defer s.Close()
+	if d := s.View().Displays[0]; d.Enabled || d.Status != "" {
+		t.Fatalf("after restart: %+v", d)
 	}
 }

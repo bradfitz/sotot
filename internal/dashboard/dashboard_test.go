@@ -18,7 +18,11 @@ import (
 
 func newTestServer(t *testing.T) (*state.Store, *httptest.Server) {
 	t.Helper()
-	st, err := state.New(state.Config{Sources: []state.SourceConfig{{ID: "chat", Name: "Chat <&>"}}, Logf: t.Logf})
+	st, err := state.New(state.Config{
+		Sources:  []state.SourceConfig{{ID: "chat", Name: "Chat <&>"}},
+		Displays: []state.DisplayConfig{{ID: "crow", Name: "Office TV"}},
+		Logf:     t.Logf,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +136,64 @@ func TestViewStreamRejectsCrossOrigin(t *testing.T) {
 	}
 	if res != nil && res.StatusCode != http.StatusForbidden {
 		t.Fatalf("status %v; want 403", res.Status)
+	}
+}
+
+func post(t *testing.T, u, contentType, body string, hdr map[string]string) int {
+	t.Helper()
+	req, _ := http.NewRequest("POST", u, strings.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	return res.StatusCode
+}
+
+func TestDisplaySwitch(t *testing.T) {
+	st, ts := newTestServer(t)
+	form := "application/x-www-form-urlencoded"
+	if !strings.Contains(get(t, ts.URL+"/"), "Turn off") {
+		t.Fatal("page lacks the display's Turn off button")
+	}
+	// Another site can't flip it, nor can a request with no browser
+	// provenance at all.
+	if c := post(t, ts.URL+"/displays/crow", form, "enabled=false", map[string]string{"Origin": "https://evil.example"}); c != 403 {
+		t.Errorf("cross-origin switch: %d", c)
+	}
+	if c := post(t, ts.URL+"/displays/crow", form, "enabled=false", map[string]string{"Sec-Fetch-Site": "cross-site"}); c != 403 {
+		t.Errorf("cross-site switch: %d", c)
+	}
+	if c := post(t, ts.URL+"/displays/crow", form, "enabled=false", nil); c != 403 {
+		t.Errorf("switch without browser headers: %d", c)
+	}
+	if !st.View().Displays[0].Enabled {
+		t.Fatal("refused requests switched the display")
+	}
+	// The dashboard's own form works.
+	if c := post(t, ts.URL+"/displays/crow", form, "enabled=false", map[string]string{"Sec-Fetch-Site": "same-origin"}); c != 303 {
+		t.Errorf("same-origin switch: %d", c)
+	}
+	if st.View().Displays[0].Enabled {
+		t.Fatal("display still on")
+	}
+	if c := post(t, ts.URL+"/displays/nope", form, "enabled=true", map[string]string{"Sec-Fetch-Site": "same-origin"}); c != 404 {
+		t.Errorf("unknown display: %d", c)
+	}
+
+	// sotot-cast reports its status without browser headers.
+	if c := post(t, ts.URL+"/api/v1/displays/crow/status", "application/json", `{"status":"Waiting: TV is in use by Netflix"}`, nil); c != 204 {
+		t.Errorf("status report: %d", c)
+	}
+	if !strings.Contains(get(t, ts.URL+"/"), "Off · Waiting: TV is in use by Netflix") {
+		t.Error("page lacks the reported status")
+	}
+	if c := post(t, ts.URL+"/api/v1/displays/crow/status", "application/json", `{"status":"x"}`, map[string]string{"Origin": "https://evil.example"}); c != 403 {
+		t.Errorf("cross-origin status report: %d", c)
 	}
 }

@@ -12,10 +12,23 @@
   <p class="empty">No sources configured.</p>
   {{end}}
 </section>
+{{with .View.Displays}}
+<section class="displays" aria-label="Displays">
+  {{range .}}
+  <form method="post" action="/displays/{{.ID}}" class="display{{if .Enabled}} display-on{{end}}">
+    <span class="display-name">{{.Name}}</span>
+    <span class="display-status">{{displayStatus . $.Now}}</span>
+    <input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}">
+    <button type="submit">{{if .Enabled}}Turn off{{else}}Turn on{{end}}</button>
+  </form>
+  {{end}}
+</section>
+{{end}}
 <section class="things" aria-label="Things">
   {{range .Entries}}
-  <article class="thing{{if eq .SourceStatus "stale"}} from-stale{{end}}{{with .When}}{{if .Past}} past{{end}}{{end}}">
+  <article class="thing{{if eq .SourceStatus "stale"}} from-stale{{end}}{{with .When}}{{if .Past}} past{{end}}{{end}}{{with .Thing.Priority}} prio-{{.}}{{end}}">
     <div class="thing-title">
+      {{if eq .Thing.Priority "high"}}<span class="prio-flag">high priority</span>{{end}}
       {{with .Thing.Kind}}<span class="kind">{{.}}</span>{{end}}
       {{if .Thing.URL}}<a href="{{.Thing.URL}}" rel="noreferrer noopener" target="_blank">{{.Thing.Title}}</a>{{else}}{{.Thing.Title}}{{end}}
     </div>
