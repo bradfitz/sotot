@@ -314,6 +314,8 @@ func TestBusyApp(t *testing.T) {
 		{[]cast.App{{AppID: "CA5E8412", DisplayName: "Netflix"}}, "Netflix"},
 		{[]cast.App{{AppID: cast.DefaultMediaReceiver, DisplayName: "Default Media Receiver", StatusText: "Now Casting: sotot"}}, ""},
 		{[]cast.App{{AppID: cast.DefaultMediaReceiver, DisplayName: "Default Media Receiver", StatusText: "Now Casting: vacation.mp4"}}, "Default Media Receiver"},
+		{[]cast.App{{AppID: cast.DefaultMediaReceiver, DisplayName: "Default Media Receiver", StatusText: "Default Media Receiver"}}, ""}, // nothing loaded
+		{[]cast.App{{AppID: cast.DefaultMediaReceiver, DisplayName: "Default Media Receiver", StatusText: "Ready To Cast"}}, ""},
 		{[]cast.App{{AppID: "X"}}, "another app"},
 	} {
 		if got := busyApp(tt.apps); got != tt.want {

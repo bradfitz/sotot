@@ -150,11 +150,18 @@ func busyApp(apps []cast.App) string {
 		if a.IsIdleScreen {
 			continue
 		}
-		// Our own stream from before a restart. (The Default Media
-		// Receiver can also be someone else's photo or video, which
-		// wouldn't be titled "sotot".)
-		if a.AppID == cast.DefaultMediaReceiver && strings.Contains(a.StatusText, "sotot") {
-			continue
+		if a.AppID == cast.DefaultMediaReceiver {
+			// Our own stream, perhaps from before a restart. (The Default
+			// Media Receiver can also be someone else's photo or video,
+			// which wouldn't be titled "sotot".)
+			if strings.Contains(a.StatusText, "sotot") {
+				continue
+			}
+			// Or with nothing loaded, as after its player gives up on
+			// our stream: its status is then just its name.
+			if a.StatusText == "" || a.StatusText == a.DisplayName || a.StatusText == "Ready To Cast" {
+				continue
+			}
 		}
 		if a.DisplayName != "" {
 			return a.DisplayName
