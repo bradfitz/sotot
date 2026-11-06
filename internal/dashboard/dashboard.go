@@ -53,6 +53,10 @@ type Server struct {
 // refreshing relative times and proving the connection is alive.
 const heartbeat = 30 * time.Second
 
+// upcomingPerSource is how many upcoming things the dashboard lists per
+// source.
+const upcomingPerSource = 3
+
 func (s *Server) logf(format string, args ...any) {
 	if s.Logf != nil {
 		s.Logf(format, args...)
@@ -127,6 +131,9 @@ type viewData struct {
 	View    state.View
 	Now     time.Time
 	Entries []present.Entry
+	// Upcoming are each source's next few things not needing attention
+	// yet.
+	Upcoming []present.SourceEntries
 	// Uncertain is whether some source's data isn't current, so an
 	// empty list doesn't mean nothing needs attention.
 	Uncertain bool
@@ -134,7 +141,12 @@ type viewData struct {
 
 func (s *Server) viewData(v state.View) viewData {
 	now := time.Now()
-	d := viewData{View: v, Now: now, Entries: present.Entries(v, now, s.Location)}
+	d := viewData{
+		View:     v,
+		Now:      now,
+		Entries:  present.Entries(v, now, s.Location),
+		Upcoming: present.Upcoming(v, now, s.Location, upcomingPerSource),
+	}
 	for _, sv := range v.Sources {
 		if sv.Status == state.Stale || sv.Status == state.Never {
 			d.Uncertain = true

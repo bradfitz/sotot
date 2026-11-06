@@ -197,3 +197,21 @@ func TestDisplaySwitch(t *testing.T) {
 		t.Errorf("cross-origin status report: %d", c)
 	}
 }
+
+func TestUpcomingSection(t *testing.T) {
+	st, ts := newTestServer(t)
+	if page := get(t, ts.URL+"/"); !strings.Contains(page, `id="upcoming"`) || !strings.Contains(page, "Nothing upcoming") {
+		t.Error("no empty #upcoming section")
+	}
+	later := time.Now().Add(30 * 24 * time.Hour)
+	publish(t, st,
+		protocol.Thing{ID: "a", Title: "Renew example.com", DueAt: &later, AttentionAt: &later},
+		protocol.Thing{ID: "b", Title: "Reply to Sam"},
+	)
+	page := get(t, ts.URL+"/")
+	i, j := strings.Index(page, "Reply to Sam"), strings.Index(page, `id="upcoming"`)
+	k := strings.Index(page, "Renew example.com")
+	if i < 0 || j < 0 || k < 0 || !(i < j && j < k) {
+		t.Errorf("want the current thing, then #upcoming with the upcoming one; positions %d, %d, %d", i, j, k)
+	}
+}

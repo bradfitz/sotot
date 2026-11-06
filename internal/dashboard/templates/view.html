@@ -49,4 +49,22 @@
   {{end}}
   {{end}}
 </section>
+<section class="upcoming" id="upcoming" aria-labelledby="upcoming-heading">
+  <h2 id="upcoming-heading"><a href="#upcoming">Upcoming</a></h2>
+  {{range .Upcoming}}
+  <div class="upcoming-source">
+    <h3>{{.SourceName}}</h3>
+    <ul>
+      {{range .Entries}}
+      <li>
+        {{if .Thing.URL}}<a href="{{.Thing.URL}}" rel="noreferrer noopener" target="_blank">{{.Thing.Title}}</a>{{else}}{{.Thing.Title}}{{end}}
+        {{with .When}}<span class="when">{{.Label}}</span> <span class="relative">({{.Relative}})</span>{{end}}
+      </li>
+      {{end}}
+    </ul>
+  </div>
+  {{else}}
+  <p class="empty">Nothing upcoming.</p>
+  {{end}}
+</section>
 {{end}}

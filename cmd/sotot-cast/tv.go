@@ -247,7 +247,7 @@ func (r *tvRenderer) animating(fs feedState) bool {
 	}
 	for _, sv := range fs.View.Sources {
 		for _, t := range sv.Things {
-			if t.Priority == protocol.PriorityUrgent {
+			if t.Priority == protocol.PriorityUrgent && !t.Upcoming(time.Now()) {
 				return true
 			}
 		}

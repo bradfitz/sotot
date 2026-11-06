@@ -108,12 +108,32 @@ func regDomain(name string, exp time.Time, autoRenew bool) *domain {
 	}
 }
 
+// titles returns the titles of the things in ts needing attention now.
 func titles(ts []protocol.Thing) string {
 	var s []string
 	for _, t := range ts {
-		s = append(s, t.Title)
+		if !t.Upcoming(now) {
+			s = append(s, t.Title)
+		}
 	}
 	return strings.Join(s, " | ")
+}
+
+func TestUpcomingRenewals(t *testing.T) {
+	p := DefaultPolicy
+	for _, tt := range []struct {
+		d     *domain
+		title string
+		from  time.Time
+	}{
+		{regDomain("a.com", days(200), false), "Renew a.com (auto-renew is off)", days(200 - 90)},
+		{regDomain("a.com", days(60), true), "a.com auto-renews at Gandi", days(60 - 14)},
+	} {
+		ts := p.things("Gandi", []*domain{tt.d}, nil, time.Time{}, now)
+		if len(ts) != 1 || !ts[0].Upcoming(now) || ts[0].Title != tt.title || !ts[0].AttentionAt.Equal(tt.from) || ts[0].Validate() != nil {
+			t.Errorf("got %+v; want upcoming %q from %v", ts, tt.title, tt.from)
+		}
+	}
 }
 
 func TestPolicy(t *testing.T) {

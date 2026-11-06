@@ -38,7 +38,7 @@ reconnects and source restarts.
 | `body` | string | Plain-text context (never rendered as HTML), ≤ 16 KiB. |
 | `url` | string | Absolute `http` or `https` link to the thing or its action page. |
 | `kind` | string | Category, e.g. `pull_request`, `meeting`, `bill`, `message`, `email`, `renewal`. |
-| `attention_at` | timestamp | When attention should begin. |
+| `attention_at` | timestamp | When attention should begin. If it's in the future, the thing is **upcoming**: it doesn't need attention yet (a renewal months off), so the browser dashboard lists it in a separate "Upcoming" section (the next few per source) and the TV doesn't show it. At that time it becomes an ordinary thing, without the source republishing it. Sources may publish upcoming things so people can see what's next. |
 | `starts_at`, `ends_at` | timestamps | A timed event. `ends_at` requires `starts_at` and must not precede it. |
 | `due_at` | timestamp | A deadline instant. |
 | `date` | `YYYY-MM-DD` | A date-only obligation or all-day event. Requires `time_zone`. |

@@ -127,3 +127,14 @@ code { font-size: 0.95em; }
 @media (prefers-reduced-motion: reduce) {
   .thing.prio-urgent { animation: none; background: #c82828; }
 }
+
+/* Upcoming: each source's next few things, not needing attention yet. */
+.upcoming { margin-top: 8px; }
+.upcoming h2 { font-size: 18px; margin: 24px 0 8px; border-top: 1px solid var(--border); padding-top: 16px; }
+.upcoming h2 a { color: var(--fg); text-decoration: none; }
+.upcoming-source h3 { font-size: 15px; margin: 12px 0 4px; color: var(--muted); font-weight: 600; }
+.upcoming-source ul { margin: 0; padding-left: 20px; }
+.upcoming-source li { margin: 2px 0; }
+.upcoming-source li a { color: var(--fg); }
+.upcoming-source .when, .upcoming-source .relative { color: var(--muted); font-size: 14px; margin-left: 6px; }
+.upcoming-source .relative { margin-left: 0; }

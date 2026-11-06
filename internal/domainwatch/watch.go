@@ -138,8 +138,11 @@ func (w *watcher) sortedNames() []string {
 func (w *watcher) summary(now time.Time) string {
 	check := 0
 	for _, d := range w.domains {
-		if len(w.policy.domainThings(w.reg.Name(), d, now)) > 0 {
-			check++
+		for _, t := range w.policy.domainThings(w.reg.Name(), d, now) {
+			if !t.Upcoming(now) {
+				check++
+				break
+			}
 		}
 	}
 	s := fmt.Sprintf("%d domains", len(w.domains))

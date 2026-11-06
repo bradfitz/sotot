@@ -64,7 +64,11 @@ type Thing struct {
 	// "meeting", "bill", or "message".
 	Kind string `json:"kind,omitempty"`
 
-	// AttentionAt is when the source thinks attention should begin.
+	// AttentionAt is when the source thinks attention should begin. If
+	// it's in the future, the thing doesn't need attention yet: it's
+	// upcoming (a renewal months off), which the browser dashboard lists
+	// separately and the TV doesn't show. It becomes an ordinary thing
+	// when the time comes, without the source republishing it.
 	AttentionAt *time.Time `json:"attention_at,omitempty"`
 
 	// StartsAt and EndsAt bound a timed event.
@@ -101,6 +105,12 @@ const (
 )
 
 // Validate reports whether t is a valid thing.
+// Upcoming reports whether t doesn't need attention yet at now: its
+// AttentionAt is in the future.
+func (t *Thing) Upcoming(now time.Time) bool {
+	return t.AttentionAt != nil && t.AttentionAt.After(now)
+}
+
 func (t *Thing) Validate() error {
 	if err := t.validate(); err != nil {
 		if t.ID != "" && len(t.ID) <= MaxIDBytes {

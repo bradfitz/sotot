@@ -35,12 +35,16 @@ type When struct {
 	Past     bool
 }
 
-// Entries returns all things in v, ordered for display, with times shown
-// in loc.
+// Entries returns the things in v needing attention at now, ordered for
+// display, with times shown in loc. Upcoming things (see Upcoming) are
+// left out.
 func Entries(v state.View, now time.Time, loc *time.Location) []Entry {
 	var es []Entry
 	for _, sv := range v.Sources {
 		for _, t := range sv.Things {
+			if t.Upcoming(now) {
+				continue
+			}
 			es = append(es, Entry{
 				Thing:        t,
 				SourceID:     sv.ID,
@@ -71,6 +75,43 @@ func Entries(v state.View, now time.Time, loc *time.Location) []Entry {
 		)
 	})
 	return es
+}
+
+// SourceEntries are some of one source's entries.
+type SourceEntries struct {
+	SourceID, SourceName string
+	Entries              []Entry
+}
+
+// Upcoming returns, for each source in v with any, its next n things that
+// don't need attention yet (their AttentionAt is after now), soonest
+// first by their shown time, with times shown in loc.
+func Upcoming(v state.View, now time.Time, loc *time.Location, n int) []SourceEntries {
+	var out []SourceEntries
+	for _, sv := range v.Sources {
+		var es []Entry
+		for _, t := range sv.Things {
+			if !t.Upcoming(now) {
+				continue
+			}
+			es = append(es, Entry{
+				Thing:        t,
+				SourceID:     sv.ID,
+				SourceName:   sv.Name,
+				SourceStatus: sv.Status,
+				When:         when(t, now, loc),
+			})
+		}
+		if len(es) == 0 {
+			continue
+		}
+		slices.SortStableFunc(es, func(a, b Entry) int {
+			// Every upcoming thing has a time: at least its AttentionAt.
+			return cmp.Or(a.When.At.Compare(b.When.At), cmp.Compare(a.Thing.Title, b.Thing.Title), cmp.Compare(a.Thing.ID, b.Thing.ID))
+		})
+		out = append(out, SourceEntries{SourceID: sv.ID, SourceName: sv.Name, Entries: es[:min(n, len(es))]})
+	}
+	return out
 }
 
 // priorityRank orders priorities for display: urgent, high, normal, low.

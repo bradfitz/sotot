@@ -59,7 +59,8 @@ var DefaultPolicy = Policy{
 func timeP(t time.Time) *time.Time { return &t }
 
 // things returns the things needing attention among domains at
-// registrar. If listErr is non-nil, the registrar's API has been failing
+// registrar, and each domain's next renewal as an upcoming thing (with
+// AttentionAt in the future) when it's further off. If listErr is non-nil, the registrar's API has been failing
 // since listErrSince. Things without a natural time (problems,
 // mismatches) have no AttentionAt; the caller stamps when it first saw
 // them.
@@ -138,6 +139,24 @@ func (p Policy) domainThings(registrar string, d *domain, now time.Time) []proto
 			Title: fmt.Sprintf("%s auto-renews soon at %s", name, registrar),
 			Body:  "Check that the payment method on file is still valid.",
 			Kind:  "renewal", URL: d.Reg.URL, DueAt: timeP(exp), Tags: append(tags, "autorenew"),
+		})
+	case d.Reg.AutoRenew:
+		// Upcoming: listed on the dashboard as what's next, until the
+		// horizon, when it's the thing above.
+		ts = append(ts, protocol.Thing{
+			ID:    id,
+			Title: fmt.Sprintf("%s auto-renews at %s", name, registrar),
+			Body:  fmt.Sprintf("Expires %s, per %s.", date, from),
+			Kind:  "renewal", URL: d.Reg.URL, DueAt: timeP(exp), Tags: append(tags, "autorenew"),
+			AttentionAt: timeP(exp.Add(-p.AutoRenewHorizon)),
+		})
+	default:
+		ts = append(ts, protocol.Thing{
+			ID:    id,
+			Title: fmt.Sprintf("Renew %s (auto-renew is off)", name),
+			Body:  fmt.Sprintf("Expires %s, per %s.", date, from),
+			Kind:  "renewal", URL: d.Reg.URL, DueAt: timeP(exp), Tags: tags,
+			AttentionAt: timeP(exp.Add(-p.Horizon)),
 		})
 	}
 
