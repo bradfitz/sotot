@@ -44,7 +44,7 @@ reconnects and source restarts.
 | `date` | `YYYY-MM-DD` | A date-only obligation or all-day event. Requires `time_zone`. |
 | `time_zone` | IANA zone | Zone for interpreting `date`; only with `date`. |
 | `tags` | string array | Labels with no built-in meaning; ≤ 32, each ≤ 64 bytes. |
-| `priority` | `"low"` or `"high"` | How pressing the thing is; absent means normal. High sorts first and is highlighted; low sorts last and is dimmed. A source may change it over time, e.g. as a deadline approaches. |
+| `priority` | `"low"`, `"high"`, or `"urgent"` | How pressing the thing is; absent means normal. High sorts first and is highlighted; low sorts last and is dimmed; urgent is for things needing attention right now (a message from family), shown as a pulsing banner on the TV. A source may change it over time, e.g. as a deadline approaches. |
 
 Timestamps are RFC 3339 with an explicit offset (`Z` or `-07:00`). A
 `date` is not an instant, and must not be combined with `due_at` or

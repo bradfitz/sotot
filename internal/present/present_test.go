@@ -18,12 +18,13 @@ func TestEntriesOrder(t *testing.T) {
 		{ID: "untimed", Title: "untimed"},
 		{ID: "soonest-low", Title: "soonest-low", DueAt: at(time.Minute), Priority: protocol.PriorityLow},
 		{ID: "later", Title: "later", DueAt: at(24 * time.Hour)},
+		{ID: "urgent", Title: "urgent", Priority: protocol.PriorityUrgent},
 	}}}}
 	var got []string
 	for _, e := range Entries(v, now, time.UTC) {
 		got = append(got, e.Thing.ID)
 	}
-	if want := "later-high soon later untimed soonest-low"; strings.Join(got, " ") != want {
+	if want := "urgent later-high soon later untimed soonest-low"; strings.Join(got, " ") != want {
 		t.Fatalf("order %q; want %q", strings.Join(got, " "), want)
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
 	"image/gif"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,8 @@ import (
 	"time"
 
 	"github.com/bradfitz/sotot/internal/cast"
+	"github.com/bradfitz/sotot/internal/state"
+	"github.com/bradfitz/sotot/protocol"
 )
 
 // TestGIFStream checks that the never-ending GIF stream is a valid GIF
@@ -314,5 +319,42 @@ func TestBusyApp(t *testing.T) {
 		if got := busyApp(tt.apps); got != tt.want {
 			t.Errorf("busyApp(%+v) = %q; want %q", tt.apps, got, tt.want)
 		}
+	}
+}
+
+func TestTVUrgentBanner(t *testing.T) {
+	now := time.Date(2026, 11, 5, 16, 0, 0, 0, time.UTC)
+	ago := now.Add(-12 * time.Minute)
+	fs := feedState{HaveView: true, Connected: true, View: state.View{Sources: []state.SourceView{
+		{ID: "signal", Name: "Signal", Status: state.Connected, Summary: "Alex is waiting", Things: []protocol.Thing{
+			{ID: "a", Title: "Message from Alex", Kind: "message", Priority: protocol.PriorityUrgent, AttentionAt: &ago},
+		}},
+		{ID: "bills", Name: "Upcoming", Status: state.Connected, Summary: "1 due soon", Things: []protocol.Thing{
+			{ID: "b", Title: "Water bill", Kind: "bill", Date: "2026-11-12", TimeZone: "UTC", Priority: protocol.PriorityHigh},
+		}},
+	}}}
+	r := newTVRenderer(1920, 1080, time.UTC)
+	if !r.animating(fs) {
+		t.Fatal("not animating with an urgent thing")
+	}
+	// The banner is just below the header; sample its left edge region.
+	at := func(img *image.RGBA) color.RGBA { return img.RGBAAt(80, 220) }
+	a := r.render(now, fs)
+	b := r.render(now.Add(pulsePeriod/2), fs)
+	ca, cb := at(a), at(b)
+	if ca.R < 0x60 || ca.G > 0x40 || cb.R < 0x60 || cb.G > 0x40 {
+		t.Fatalf("banner pixels %v, %v aren't red", ca, cb)
+	}
+	if ca == cb {
+		t.Fatal("banner doesn't pulse")
+	}
+	if p := os.Getenv("SOTOT_TV_PNG"); p != "" { // for looking at it
+		var buf bytes.Buffer
+		png.Encode(&buf, b)
+		os.WriteFile(p, buf.Bytes(), 0o644)
+	}
+	fs.View.Sources[0].Things = nil
+	if r.animating(fs) {
+		t.Error("animating without urgent things")
 	}
 }

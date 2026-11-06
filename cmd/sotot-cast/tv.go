@@ -170,6 +170,17 @@ func (r *tvRenderer) render(now time.Time, fs feedState) *image.RGBA {
 	}
 	v := fs.View
 
+	// Urgent things get pulsing banners above everything else.
+	var urgent, entries []present.Entry
+	for _, e := range present.Entries(v, now, r.loc) {
+		if e.Thing.Priority == protocol.PriorityUrgent {
+			urgent = append(urgent, e)
+		} else {
+			entries = append(entries, e)
+		}
+	}
+	y = r.drawUrgent(img, urgent, m, right, y, now)
+
 	// Sources: a chip per source with a colored dot and a word label.
 	chipH := r.px(56)
 	x := m
@@ -197,7 +208,6 @@ func (r *tvRenderer) render(now time.Time, fs feedState) *image.RGBA {
 	y += chipH + r.px(36)
 
 	// Things, as many as fit.
-	entries := present.Entries(v, now, r.loc)
 	rowH := r.px(112)
 	gap := r.px(14)
 	moreH := r.px(52)
@@ -224,6 +234,61 @@ func (r *tvRenderer) render(now time.Time, fs feedState) *image.RGBA {
 		r.text(img, m, y+r.px(48), 40, false, c, msg, right-m)
 	}
 	return img
+}
+
+// pulsePeriod is how long the urgent banner's pulse takes.
+const pulsePeriod = 1600 * time.Millisecond
+
+// animating reports whether the view has moving parts (urgent banners),
+// so needs frames more often than once a second.
+func (r *tvRenderer) animating(fs feedState) bool {
+	if !fs.HaveView {
+		return false
+	}
+	for _, sv := range fs.View.Sources {
+		for _, t := range sv.Things {
+			if t.Priority == protocol.PriorityUrgent {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// drawUrgent draws a pulsing full-width banner for each of up to two
+// urgent entries, starting at y, and returns the y below them.
+func (r *tvRenderer) drawUrgent(img *image.RGBA, es []present.Entry, left, right, y int, now time.Time) int {
+	if len(es) == 0 {
+		return y
+	}
+	// Pulse between dark and bright red.
+	phase := float64(now.UnixMilli()%pulsePeriod.Milliseconds()) / float64(pulsePeriod.Milliseconds())
+	k := (1 - math.Cos(2*math.Pi*phase)) / 2 // 0..1..0
+	lerp := func(a, b uint8) uint8 { return uint8(float64(a) + (float64(b)-float64(a))*k) }
+	dark, bright := color.RGBA{0x6a, 0x10, 0x14, 0xff}, color.RGBA{0xe8, 0x30, 0x30, 0xff}
+	bg := color.RGBA{lerp(dark.R, bright.R), lerp(dark.G, bright.G), lerp(dark.B, bright.B), 0xff}
+	white := color.RGBA{0xff, 0xff, 0xff, 0xff}
+
+	const maxBanners = 2
+	bh := r.px(150)
+	for i, e := range es {
+		if i == maxBanners {
+			r.text(img, left, y+r.px(36), 32, true, tvRed, fmt.Sprintf("+ %d more urgent", len(es)-i), 0)
+			y += r.px(52)
+			break
+		}
+		roundRect(img, image.Rect(left, y, right, y+bh), float64(r.px(18)), bg)
+		x := left + r.px(36)
+		maxX := right - r.px(36)
+		r.text(img, x, y+r.px(72), 58, true, white, e.Thing.Title, maxX-x)
+		meta := e.SourceName
+		if w := e.When; w != nil {
+			meta = w.Relative + " · " + meta
+		}
+		r.text(img, x, y+r.px(124), 34, true, white, meta, maxX-x)
+		y += bh + r.px(18)
+	}
+	return y + r.px(10)
 }
 
 func (r *tvRenderer) drawEntry(img *image.RGBA, rect image.Rectangle, e present.Entry) {

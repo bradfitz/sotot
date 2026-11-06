@@ -107,6 +107,7 @@ func main() {
 	}
 
 	var render func(time.Time) *image.RGBA
+	animating := func() bool { return false }
 	var changed <-chan struct{} // besides the clock
 	var fd *feed                // nil without --dashboard
 	if *flagDashboard != "" {
@@ -122,6 +123,7 @@ func main() {
 		go fd.run(ctx)
 		tv := newTVRenderer(w, h, loc)
 		render = func(now time.Time) *image.RGBA { return tv.render(now, fd.state()) }
+		animating = func() bool { return tv.animating(fd.state()) }
 		changed = fd.subscribe()
 	} else {
 		tp := newRenderer(w, h, *flagMode)
@@ -161,7 +163,13 @@ func main() {
 		// nothing.
 		for {
 			now := time.Now()
-			t := time.NewTimer(now.Truncate(interval).Add(interval).Sub(now))
+			next := now.Truncate(interval).Add(interval)
+			if animating() {
+				// Moving parts (an urgent banner's pulse): render at the
+				// video frame rate.
+				next = now.Add(time.Second / time.Duration(*flagFPS))
+			}
+			t := time.NewTimer(next.Sub(now))
 			select {
 			case <-ctx.Done():
 				t.Stop()

@@ -112,3 +112,18 @@ code { font-size: 0.95em; }
   cursor: pointer;
 }
 .display button:hover { border-color: var(--muted); }
+
+/* Urgent things pulse, as on the TV. */
+@keyframes sotot-pulse {
+  0%, 100% { background: #6a1014; }
+  50% { background: #e83030; }
+}
+.thing.prio-urgent {
+  border: none;
+  animation: sotot-pulse 1.6s ease-in-out infinite;
+}
+.thing.prio-urgent, .thing.prio-urgent .thing-meta, .thing.prio-urgent a { color: #fff; }
+.thing.prio-urgent .thing-title { font-size: 22px; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .thing.prio-urgent { animation: none; background: #c82828; }
+}

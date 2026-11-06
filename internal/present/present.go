@@ -3,7 +3,7 @@
 // The browser dashboard and the TV view share it.
 //
 // The ordering is deliberately simple: by the priority sources assign
-// (high, normal, low), then things with a time, earliest first, then the
+// (urgent, high, normal, low), then things with a time, earliest first, then the
 // rest. sotot doesn't rank urgency itself.
 package present
 
@@ -73,9 +73,11 @@ func Entries(v state.View, now time.Time, loc *time.Location) []Entry {
 	return es
 }
 
-// priorityRank orders priorities for display: high, normal, low.
+// priorityRank orders priorities for display: urgent, high, normal, low.
 func priorityRank(p string) int {
 	switch p {
+	case protocol.PriorityUrgent:
+		return -1
 	case protocol.PriorityHigh:
 		return 0
 	case protocol.PriorityLow:

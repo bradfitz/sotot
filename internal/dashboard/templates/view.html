@@ -29,6 +29,7 @@
   <article class="thing{{if eq .SourceStatus "stale"}} from-stale{{end}}{{with .When}}{{if .Past}} past{{end}}{{end}}{{with .Thing.Priority}} prio-{{.}}{{end}}">
     <div class="thing-title">
       {{if eq .Thing.Priority "high"}}<span class="prio-flag">high priority</span>{{end}}
+      {{if eq .Thing.Priority "urgent"}}<span class="prio-flag">urgent</span>{{end}}
       {{with .Thing.Kind}}<span class="kind">{{.}}</span>{{end}}
       {{if .Thing.URL}}<a href="{{.Thing.URL}}" rel="noreferrer noopener" target="_blank">{{.Thing.Title}}</a>{{else}}{{.Thing.Title}}{{end}}
     </div>

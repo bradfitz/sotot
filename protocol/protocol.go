@@ -85,8 +85,8 @@ type Thing struct {
 	Tags []string `json:"tags,omitempty"`
 
 	// Priority is how pressing the source thinks the thing is:
-	// PriorityLow, PriorityHigh, or empty for normal. A source may raise
-	// it over time, e.g. as a deadline approaches.
+	// PriorityLow, PriorityHigh, PriorityUrgent, or empty for normal. A
+	// source may raise it over time, e.g. as a deadline approaches.
 	Priority string `json:"priority,omitempty"`
 }
 
@@ -94,6 +94,10 @@ type Thing struct {
 const (
 	PriorityLow  = "low"
 	PriorityHigh = "high"
+	// PriorityUrgent is for things that need attention right now, like
+	// a message from family. Displays make it hard to miss: the TV view
+	// shows it as a pulsing banner. Use it sparingly.
+	PriorityUrgent = "urgent"
 )
 
 // Validate reports whether t is a valid thing.
@@ -149,7 +153,7 @@ func (t *Thing) validate() error {
 		}
 	}
 	switch t.Priority {
-	case "", PriorityLow, PriorityHigh:
+	case "", PriorityLow, PriorityHigh, PriorityUrgent:
 	default:
 		return fmt.Errorf("unknown priority %q", t.Priority)
 	}
