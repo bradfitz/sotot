@@ -17,6 +17,46 @@ type display struct {
 	enabled  bool   // persisted
 	status   string // reported by its driver; not persisted
 	statusAt time.Time
+
+	autoOff     int         // minutes after midnight, if cfg.AutoOff is set
+	stopAutoOff func() bool // nil if not scheduled
+}
+
+// scheduleAutoOffLocked arranges for d to be switched off at its next
+// AutoOff time, if it has one.
+func (s *Store) scheduleAutoOffLocked(d *display) {
+	if d.cfg.AutoOff == "" || s.closed {
+		return
+	}
+	now := s.now()
+	next := nextTimeOfDay(now.In(s.loc), d.autoOff)
+	d.stopAutoOff = s.afterFunc(next.Sub(now), func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return
+		}
+		if d.enabled {
+			d.enabled = false
+			s.logf("state: display %s: switched off at %s, as configured", d.cfg.ID, d.cfg.AutoOff)
+			s.changedLocked(nil, false)
+			if err := s.saveDisplaysLocked(); err != nil {
+				s.logf("state: saving display switches: %v", err)
+			}
+		}
+		s.scheduleAutoOffLocked(d)
+	})
+}
+
+// nextTimeOfDay returns the first time after now (in now's location) at
+// the given minutes after midnight, by the wall clock.
+func nextTimeOfDay(now time.Time, minutes int) time.Time {
+	y, m, day := now.Date()
+	t := time.Date(y, m, day, minutes/60, minutes%60, 0, 0, now.Location())
+	if !t.After(now) {
+		t = time.Date(y, m, day+1, minutes/60, minutes%60, 0, 0, now.Location())
+	}
+	return t
 }
 
 // ErrUnknownDisplay is returned for a display ID that's not configured.

@@ -78,7 +78,7 @@ func runCmd(args []string) error {
 	useTsnet := fs.Bool("tsnet", false, "serve the dashboard on a Tailscale tailnet via tsnet instead of a host TCP listener")
 	internalListen := fs.String("internal-listen", "", "also serve the dashboard on this plain TCP address, e.g. :8080 for other programs in a cluster (sotot-cast); unlike --listen, works alongside --tsnet")
 	tsnetHostname := fs.String("tsnet-hostname", "sotot", "tsnet mode: tailnet host name")
-	tz := fs.String("tz", "", "time zone for displaying times (default local)")
+	tz := fs.String("tz", "", "time zone for displaying times and for displays' auto_off times (default local)")
 	verboseTailcat := fs.Bool("verbose-tailcat", false, "log tailcat transport details")
 	fs.Parse(args)
 
@@ -104,7 +104,7 @@ func runCmd(args []string) error {
 	for _, s := range srcs {
 		scfg = append(scfg, state.SourceConfig{ID: s.ID, Name: s.Name})
 	}
-	st, err := state.New(state.Config{Sources: scfg, Displays: displays, CacheDir: filepath.Join(*stateDir, "cache")})
+	st, err := state.New(state.Config{Sources: scfg, Displays: displays, CacheDir: filepath.Join(*stateDir, "cache"), Location: loc})
 	if err != nil {
 		return err
 	}

@@ -420,3 +420,67 @@ func TestDisplays(t *testing.T) {
 		t.Fatalf("after restart: %+v", d)
 	}
 }
+
+func TestDisplayAutoOff(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newFakeClock() // 2026-10-17 12:00 UTC: 5 AM in Los Angeles
+	s, err := New(Config{
+		Displays:  []DisplayConfig{{ID: "crow", AutoOff: "17:00"}, {ID: "garage"}},
+		Location:  la,
+		CacheDir:  t.TempDir(),
+		Now:       clock.Now,
+		AfterFunc: clock.AfterFunc,
+		Logf:      t.Logf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	enabled := func() string {
+		var out []string
+		for _, d := range s.View().Displays {
+			out = append(out, fmt.Sprintf("%s=%v", d.ID, d.Enabled))
+		}
+		return strings.Join(out, " ")
+	}
+	clock.Advance(12*time.Hour - time.Minute) // 4:59 PM
+	if got := enabled(); got != "crow=true garage=true" {
+		t.Fatalf("before 5 PM: %s", got)
+	}
+	clock.Advance(time.Minute) // 5 PM
+	if got := enabled(); got != "crow=false garage=true" {
+		t.Fatalf("at 5 PM: %s", got)
+	}
+	// Switched back on, it stays on until 5 PM the next day.
+	s.SetDisplayEnabled("crow", true)
+	clock.Advance(23 * time.Hour)
+	if got := enabled(); got != "crow=true garage=true" {
+		t.Fatalf("next day before 5 PM: %s", got)
+	}
+	clock.Advance(time.Hour)
+	if got := enabled(); got != "crow=false garage=true" {
+		t.Fatalf("next day at 5 PM: %s", got)
+	}
+
+	if _, err := New(Config{Displays: []DisplayConfig{{ID: "x", AutoOff: "5pm"}}}); err == nil {
+		t.Error("bad auto_off accepted")
+	}
+}
+
+func TestNextTimeOfDay(t *testing.T) {
+	la, _ := time.LoadLocation("America/Los_Angeles")
+	for _, tt := range []struct{ now, want string }{
+		{"2026-11-14 09:00", "2026-11-14 17:00"},
+		{"2026-11-14 17:00", "2026-11-15 17:00"},
+		{"2026-11-14 18:00", "2026-11-15 17:00"},
+		{"2026-10-31 18:00", "2026-11-01 17:00"}, // across the end of DST
+	} {
+		now, _ := time.ParseInLocation("2006-01-02 15:04", tt.now, la)
+		if got := nextTimeOfDay(now, 17*60).Format("2006-01-02 15:04"); got != tt.want {
+			t.Errorf("after %s: %s; want %s", tt.now, got, tt.want)
+		}
+	}
+}

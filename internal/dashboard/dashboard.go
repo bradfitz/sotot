@@ -277,6 +277,9 @@ func displayStatus(d state.DisplayView, now time.Time) string {
 	case d.Status != "":
 		st += " · " + d.Status
 	}
+	if t, err := time.Parse("15:04", d.AutoOff); err == nil && d.Enabled {
+		st += " · turns off at " + t.Format("3:04 PM")
+	}
 	return st
 }
 

@@ -51,12 +51,20 @@ type SourceConfig struct {
 type DisplayConfig struct {
 	ID   string `json:"id"` // see ValidSourceID
 	Name string `json:"name"`
+	// AutoOff, if set, is a time of day ("17:00", in Config.Location)
+	// at which the display is switched off every day if it's on, as at
+	// the end of a working day. It can be switched back on.
+	AutoOff string `json:"auto_off,omitempty"`
 }
 
 // Config configures a Store.
 type Config struct {
 	Sources  []SourceConfig
 	Displays []DisplayConfig
+
+	// Location is the time zone of displays' AutoOff times. Nil means
+	// time.Local.
+	Location *time.Location
 
 	// CacheDir, if non-empty, is where per-source JSON cache files are
 	// read at startup and written after changes.
@@ -92,6 +100,7 @@ type Store struct {
 	closed   bool
 
 	displaysFile string // where display switches persist; "" if none
+	loc          *time.Location
 }
 
 type source struct {
@@ -126,6 +135,7 @@ func New(cfg Config) (*Store, error) {
 		logf:      cfg.Logf,
 		sources:   map[string]*source{},
 		subs:      map[*Subscription]bool{},
+		loc:       cmp.Or(cfg.Location, time.Local),
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -160,7 +170,15 @@ func New(cfg Config) (*Store, error) {
 			return nil, fmt.Errorf("duplicate display ID %q", dc.ID)
 		}
 		seenDisplay[dc.ID] = true
-		s.displays = append(s.displays, &display{cfg: dc, enabled: true})
+		d := &display{cfg: dc, enabled: true}
+		if dc.AutoOff != "" {
+			t, err := time.Parse("15:04", dc.AutoOff)
+			if err != nil {
+				return nil, fmt.Errorf("display %q: auto_off %q: want a time like 17:00", dc.ID, dc.AutoOff)
+			}
+			d.autoOff = t.Hour()*60 + t.Minute()
+		}
+		s.displays = append(s.displays, d)
 	}
 
 	if cfg.CacheDir != "" {
@@ -190,6 +208,9 @@ func New(cfg Config) (*Store, error) {
 	for _, src := range s.sources {
 		s.scheduleExpiryLocked(src)
 	}
+	for _, d := range s.displays {
+		s.scheduleAutoOffLocked(d)
+	}
 	return s, nil
 }
 
@@ -200,6 +221,11 @@ func (s *Store) Close() error {
 	for _, src := range s.sources {
 		if src.stopExpiry != nil {
 			src.stopExpiry()
+		}
+	}
+	for _, d := range s.displays {
+		if d.stopAutoOff != nil {
+			d.stopAutoOff()
 		}
 	}
 	s.mu.Unlock()
@@ -463,6 +489,9 @@ type DisplayView struct {
 	// "Casting" or "Waiting: TV is in use by Netflix".
 	Status   string     `json:"status,omitempty"`
 	StatusAt *time.Time `json:"status_at,omitempty"`
+	// AutoOff is the configured time of day it's switched off, if any,
+	// like "17:00".
+	AutoOff string `json:"auto_off,omitempty"`
 }
 
 // SourceView is the dashboard state of one source.
@@ -508,6 +537,7 @@ func (s *Store) viewLocked() View {
 			Enabled:  d.enabled,
 			Status:   d.status,
 			StatusAt: timePtr(d.statusAt),
+			AutoOff:  d.cfg.AutoOff,
 		})
 	}
 	return v

@@ -215,3 +215,15 @@ func TestUpcomingSection(t *testing.T) {
 		t.Errorf("want the current thing, then #upcoming with the upcoming one; positions %d, %d, %d", i, j, k)
 	}
 }
+
+func TestDisplayStatusAutoOff(t *testing.T) {
+	now := time.Now()
+	d := state.DisplayView{ID: "crow", Enabled: true, Status: "Casting", StatusAt: &now, AutoOff: "17:00"}
+	if got, want := displayStatus(d, now), "On · Casting · turns off at 5:00 PM"; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+	d.Enabled, d.Status = false, "Off"
+	if got, want := displayStatus(d, now), "Off · Off"; got != want {
+		t.Errorf("got %q; want %q", got, want)
+	}
+}
