@@ -91,15 +91,20 @@ set at any time.
 ### Validity
 
 `valid_for_seconds` (required on `snapshot` and `refresh`, optional on
-`delta`) is how long the data stays fresh after the source disconnects,
-counted from when the daemon accepts the message. It's a cache lifetime,
-not a deadline. A delta without it leaves the expiry unchanged: learning
-about one thing doesn't vouch for all the others. Zero means the data goes
-stale as soon as the source disconnects.
+`delta`) is how long the data stays fresh, counted from when the daemon
+accepts the message. A delta without it leaves the expiry unchanged:
+learning about one thing doesn't vouch for all the others.
 
-While connected, a source is current regardless of expiry. Choose the
-validity from the source's schedule: a job that runs daily might use a
-little over a day.
+The expiry applies whether or not the source is connected. A connected
+source must renew its validity (with a `refresh`, or a snapshot or delta
+carrying `valid_for_seconds`) before it runs out, or the dashboard shows
+it as stale: a live connection proves only that the process is running,
+not that it's doing its job. So renew validity only after the source has
+confirmed its data (a successful poll), never on a timer of its own, and
+choose the validity from the source's schedule: a few check intervals for
+a source that polls, a little over a day for a job that runs daily. It
+also covers restarts: the data stays fresh that long after the source
+disconnects.
 
 ## Messages from the daemon
 

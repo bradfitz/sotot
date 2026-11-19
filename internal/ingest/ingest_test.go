@@ -203,10 +203,10 @@ func TestSnapshotDeadline(t *testing.T) {
 func TestPongTimeout(t *testing.T) {
 	st, ts := newTestServer(t, &Handler{PingInterval: 20 * time.Millisecond, PongTimeout: 50 * time.Millisecond})
 	r := dialRaw(t, ts)
-	r.send(`{"type":"snapshot","seq":1,"valid_for_seconds":0,"things":[]}`)
+	r.send(`{"type":"snapshot","seq":1,"valid_for_seconds":3600,"things":[]}`)
 	// Don't read, so pings go unanswered.
 	waitFor(t, "connected", func() bool { return chatView(st).Status == state.Connected })
-	waitFor(t, "liveness timeout", func() bool { return chatView(st).Status == state.Stale })
+	waitFor(t, "liveness timeout", func() bool { return chatView(st).Status == state.Fresh }) // disconnected
 }
 
 func TestTakeover(t *testing.T) {
@@ -298,6 +298,7 @@ func TestClientNoticesVanishedDaemon(t *testing.T) {
 	}
 	c := &source.Client{Dial: dial, Logf: testLogf(t), PingInterval: 50 * time.Millisecond, PongTimeout: 100 * time.Millisecond}
 	c.Set([]protocol.Thing{{ID: "a", Title: "A"}})
+	c.SetValidFor(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)

@@ -108,12 +108,14 @@ func (c *Client) changedLocked() {
 }
 
 // SetValidFor sets how long sotot should consider this source's data
-// fresh after it disconnects, counted from when sotot receives it. It
+// fresh, counted from when sotot receives it, connected or not. It
 // renews the validity of the current data on the next message.
 //
-// Choose it from the source's own schedule: a source that runs daily
-// might use a little over a day. The default is zero: the data becomes
-// stale as soon as the source disconnects.
+// A long-running source must renew it with Refresh after each successful
+// check, or sotot shows it as stale even while it's connected, as it
+// would be if it were stuck. Choose it from the source's own schedule: a
+// few check intervals, or a little over a day for a source that runs
+// daily. The default is zero: the data becomes stale at once.
 func (c *Client) SetValidFor(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -139,7 +141,8 @@ func (c *Client) SetSummary(s string) error {
 }
 
 // Refresh renews the validity of the current data, without changing it.
-// Call it when the source has confirmed its data is still accurate.
+// Call it when the source has confirmed its data is still accurate, and
+// only then: it's how sotot knows the source is working.
 func (c *Client) Refresh() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -267,6 +267,10 @@ func StatusDetail(sv state.SourceView, now time.Time) string {
 			return "data valid for " + strings.TrimPrefix(relative(*sv.ExpiresAt, now), "in ")
 		}
 	case state.Stale:
+		if sv.Live && sv.LastMessageAt != nil {
+			// Connected, but it stopped confirming its data.
+			return "connected, but no update since " + relative(*sv.LastMessageAt, now)
+		}
 		if sv.ExpiresAt != nil {
 			return "data expired " + relative(*sv.ExpiresAt, now)
 		}

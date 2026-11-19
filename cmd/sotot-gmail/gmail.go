@@ -71,7 +71,11 @@ func newGmailFromTokenFile(ctx context.Context, path string) (*gmailClient, erro
 		return nil, fmt.Errorf("%s: missing client_id or refresh_token; rerun sotot-gmail login", path)
 	}
 	ts := t.config().TokenSource(ctx, &oauth2.Token{RefreshToken: t.RefreshToken})
-	return &gmailClient{hc: oauth2.NewClient(ctx, ts), base: "https://gmail.googleapis.com"}, nil
+	hc := oauth2.NewClient(ctx, ts)
+	// A hung request must fail, so the source reports the problem (and
+	// stops renewing its data's validity) rather than waiting forever.
+	hc.Timeout = time.Minute
+	return &gmailClient{hc: hc, base: "https://gmail.googleapis.com"}, nil
 }
 
 func (g *gmailClient) get(ctx context.Context, path string, q url.Values, v any) error {

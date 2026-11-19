@@ -145,11 +145,25 @@ func TestStatusLifecycle(t *testing.T) {
 		t.Fatalf("after snapshot: %+v", sv)
 	}
 
-	// A live session stays current regardless of expiry.
+	// A live session that stops renewing its data goes stale too: the
+	// source may be stuck.
+	sub, _ := s.Subscribe()
+	defer sub.Close()
 	clock.Advance(2 * time.Hour)
-	if got := sourceView(t, s, "bills").Status; got != Connected {
-		t.Fatalf("live past expiry: status %v; want connected", got)
+	if sv := sourceView(t, s, "bills"); sv.Status != Stale || !sv.Live {
+		t.Fatalf("live past expiry: status %v, live %v; want stale, live", sv.Status, sv.Live)
 	}
+	select {
+	case <-sub.C():
+	default:
+		t.Fatal("expiry of a live source didn't notify subscribers")
+	}
+	// Renewing makes it current again.
+	mustApply(t, s, "bills", gen, &protocol.Refresh{Type: protocol.TypeRefresh, Seq: 2, ValidForSeconds: protocol.Seconds(time.Hour)})
+	if got := sourceView(t, s, "bills").Status; got != Connected {
+		t.Fatalf("after refresh: status %v; want connected", got)
+	}
+	clock.Advance(2 * time.Hour)
 
 	// After disconnecting, the stored expiry applies immediately; there's
 	// no extra grace period starting at the disconnect.

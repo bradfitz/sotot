@@ -24,11 +24,14 @@ import (
 type Status string
 
 const (
-	// Connected: a live authoritative session with an accepted snapshot.
+	// Connected: a live authoritative session with an accepted snapshot,
+	// whose data hasn't expired.
 	Connected Status = "connected"
 	// Fresh: no live session, but the cached snapshot hasn't expired.
 	Fresh Status = "fresh"
-	// Stale: no live session and the cached snapshot has expired.
+	// Stale: the data has expired: the source disconnected and didn't
+	// come back in time, or it's connected but stopped renewing its data
+	// (it's stuck, or its own checks are failing).
 	Stale Status = "stale"
 	// Never: no snapshot has ever been accepted (or the cache was lost).
 	Never Status = "never"
@@ -387,13 +390,13 @@ func (s *Store) Apply(sourceID string, gen uint64, msg any) (protocol.Ack, error
 }
 
 // scheduleExpiryLocked arranges for subscribers to hear about the status
-// change when a disconnected source's data expires.
+// change when a source's data expires, connected or not.
 func (s *Store) scheduleExpiryLocked(src *source) {
 	if src.stopExpiry != nil {
 		src.stopExpiry()
 		src.stopExpiry = nil
 	}
-	if s.closed || !src.hasSnapshot || src.active != 0 {
+	if s.closed || !src.hasSnapshot {
 		return
 	}
 	d := src.expiresAt.Sub(s.now())
@@ -501,7 +504,10 @@ type SourceView struct {
 	Status Status `json:"status"`
 	// Connecting is whether a new session is awaiting its first
 	// snapshot. The status reflects the previous data until then.
-	Connecting  bool       `json:"connecting,omitempty"`
+	Connecting bool `json:"connecting,omitempty"`
+	// Live is whether the source has an authoritative session, even if
+	// its status is stale.
+	Live        bool       `json:"live,omitempty"`
 	HasSnapshot bool       `json:"has_snapshot"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	// Summary is the source's own very short status, like "15 domains".
@@ -545,14 +551,16 @@ func (s *Store) viewLocked() View {
 
 func (src *source) status(now time.Time) Status {
 	switch {
-	case src.active != 0:
-		return Connected
 	case !src.hasSnapshot:
 		return Never
-	case now.Before(src.expiresAt):
-		return Fresh
-	default:
+	case !now.Before(src.expiresAt):
+		// Even if connected: a connection proves only that the process
+		// is alive, not that it's doing its job.
 		return Stale
+	case src.active != 0:
+		return Connected
+	default:
+		return Fresh
 	}
 }
 
@@ -570,6 +578,7 @@ func (src *source) view(now time.Time) SourceView {
 		Name:               cmp.Or(src.cfg.Name, src.cfg.ID),
 		Status:             src.status(now),
 		Connecting:         len(src.pending) > 0,
+		Live:               src.active != 0,
 		HasSnapshot:        src.hasSnapshot,
 		ExpiresAt:          timePtr(src.expiresAt),
 		Summary:            src.summary,
